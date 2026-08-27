@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta charset="utf-8">
+  <title>连接已过期 · SendHere</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="expired-page">
+    <section class="card expired-card">
+      <span class="scan-icon">⌁</span>
+      <h1>连接已过期</h1>
+      <p class="muted">为了保护局域网传输，本次连接已失效。</p>
+      <div class="help-box">
+        <strong>重新连接</strong>
+        <p>请回到电脑端 SendHere，点击左下角“添加 / 连接设备”，查看新的二维码。</p>
+        <p>然后使用 iPhone 系统相机或微信“扫一扫”扫描该二维码，即可恢复原来的设备会话。</p>
+        <p id="wechat-help" hidden>当前页面在微信内打开时，可直接使用微信“扫一扫”；不需要在这里刷新页面。</p>
+      </div>
+    </section>
+  </main>
+  <script>
+    if (/MicroMessenger/i.test(navigator.userAgent)) {
+      document.querySelector("#wechat-help").hidden = false;
+    }
+  </script>
+</body>
+</html>

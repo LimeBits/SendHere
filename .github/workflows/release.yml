@@ -1,0 +1,47 @@
+name: Build Desktop Packages
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: Build unsigned macOS DMG
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter build macos --release
+      - run: ./Scripts/package-macos-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SendHere-unsigned-macos
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error
+
+  windows:
+    name: Build Windows ZIP
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: Create ZIP
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath SendHere-win-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SendHere-win-x64
+          path: SendHere-win-x64.zip

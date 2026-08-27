@@ -1,0 +1,33 @@
+name: send_here
+description: Local, account-free text and file transfer between a computer and phone.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  bonsoir: ^7.1.5
+  crypto: ^3.0.3
+  file_selector: ^1.0.3
+  mime: ^2.0.0
+  path: ^1.9.0
+  path_provider: ^2.1.4
+  qr_flutter: ^4.1.0
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+  shelf_web_socket: ^2.0.0
+  shared_preferences: ^2.3.2
+  web_socket_channel: ^3.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/web/

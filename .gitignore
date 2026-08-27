@@ -1,0 +1,24 @@
+.DS_Store
+.AppleDouble
+
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# macOS / Windows generated platform projects
+macos/Flutter/ephemeral/
+macos/Runner.xcworkspace/xcuserdata/
+macos/Runner.xcodeproj/xcuserdata/
+windows/flutter/ephemeral/
+
+# Release artifacts and local credentials
+dist/
+*.dmg
+.dev.vars
+
+# Local scratch files
+*.log

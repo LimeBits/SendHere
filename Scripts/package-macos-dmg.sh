@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Package Flutter's macOS Release app as a drag-to-Applications DMG.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_NAME="SendHere"
+APP_PATH="${ROOT_DIR}/build/macos/Build/Products/Release/${APP_NAME}.app"
+DIST_DIR="${SENDHERE_DIST_DIR:-${ROOT_DIR}/dist}"
+VERSION="$(grep '^version:' "${ROOT_DIR}/pubspec.yaml" | awk '{print $2}' | cut -d+ -f1)"
+BUILD="$(grep '^version:' "${ROOT_DIR}/pubspec.yaml" | awk '{print $2}' | cut -d+ -f2)"
+STAMP="$(date '+%Y%m%d-%H%M')"
+DMG_PATH="${DIST_DIR}/${APP_NAME}-${VERSION}-build${BUILD}-${STAMP}.dmg"
+RW_PATH="${DIST_DIR}/${APP_NAME}-${VERSION}-build${BUILD}-${STAMP}-rw.dmg"
+MOUNT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sendhere-dmg.XXXXXX")"
+
+if [[ ! -d "${APP_PATH}" ]]; then
+  printf '→ Building Flutter macOS release app...\n'
+  (cd "${ROOT_DIR}" && flutter build macos --release)
+fi
+if [[ ! -d "${APP_PATH}" ]]; then
+  printf 'error: Flutter macOS app not found: %s\n' "${APP_PATH}" >&2
+  exit 1
+fi
+
+mkdir -p "${DIST_DIR}"
+rm -f "${DMG_PATH}" "${RW_PATH}"
+cleanup() { hdiutil detach "${MOUNT_DIR}" -quiet 2>/dev/null || true; rmdir "${MOUNT_DIR}" 2>/dev/null || true; }
+trap cleanup EXIT
+hdiutil create -size "100m" -volname "${APP_NAME}" -ov -fs HFS+ -layout SPUD -type UDIF "${RW_PATH}" >/dev/null
+hdiutil attach "${RW_PATH}" -readwrite -noverify -noautoopen -mountpoint "${MOUNT_DIR}" >/dev/null
+cp -R "${APP_PATH}" "${MOUNT_DIR}/"
+ln -s /Applications "${MOUNT_DIR}/Applications"
+hdiutil detach "${MOUNT_DIR}" -quiet
+trap - EXIT
+rmdir "${MOUNT_DIR}" 2>/dev/null || true
+hdiutil convert "${RW_PATH}" -format UDZO -o "${DMG_PATH}" >/dev/null
+rm -f "${RW_PATH}"
+(cd "${DIST_DIR}" && shasum -a 256 "$(basename "${DMG_PATH}")" > "$(basename "${DMG_PATH}").sha256")
+printf '✓ DMG ready: %s\n' "${DMG_PATH}"

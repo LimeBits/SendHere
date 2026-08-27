@@ -1,0 +1,26 @@
+:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172033; background: #f5f7fb; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 20px 16px 40px; }
+main { max-width: 620px; margin: auto; }
+header { display: flex; align-items: center; gap: 12px; margin: 8px 2px 20px; }
+.mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: #4256d6; color: white; font-size: 25px; }
+h1, h2, p { margin: 0; } h1 { font-size: 22px; } h2 { font-size: 17px; } header p, .muted { color: #687184; font-size: 14px; margin-top: 3px; }
+.section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.card { background: white; border: 1px solid #e1e5ee; border-radius: 16px; padding: 18px; margin-bottom: 14px; box-shadow: 0 2px 10px #23345a0a; }
+textarea { width: 100%; min-height: 112px; padding: 12px; font: inherit; border: 1px solid #cfd5e2; border-radius: 10px; resize: vertical; margin-bottom: 10px; }
+button, .file-button, article a { display: inline-flex; align-items: center; justify-content: center; appearance: none; border: 0; border-radius: 9px; padding: 10px 14px; font: inherit; text-decoration: none; cursor: pointer; min-height: 42px; }
+button { color: white; background: #4256d6; } .file-button, article a, .secondary { color: #3346bb; background: #edf0ff; }
+.secondary.small { min-height: 34px; padding: 6px 10px; font-size: 13px; }
+.file-button { position: relative; overflow: hidden; white-space: nowrap; }
+.file-button input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+@media (max-width: 380px) { body { padding: 14px 12px 32px; } .card { padding: 14px; } .actions > * { flex: 1; } }
+#incoming.empty { color: #8992a4; } article { padding: 13px 0; border-bottom: 1px solid #edf0f5; line-height: 1.5; } article:last-child { border: 0; } article .content { white-space: pre-wrap; margin-bottom: 9px; }.privacy { color: #7d8798; font-size: 13px; text-align: center; margin-top: 20px; }
+.expired-page { min-height: 100vh; display: grid; place-items: center; }
+.expired-card { width: min(100%, 460px); text-align: center; padding: 30px 22px; }
+.scan-icon { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 20px; background: #edf0ff; color: #4256d6; font-size: 38px; }
+.expired-card h1 { margin-bottom: 8px; }
+
+.help-box { margin-top: 18px; padding: 14px; text-align: left; border-radius: 10px; background: #f5f7fb; color: #596277; font-size: 14px; }
+.help-box p { margin-top: 7px; line-height: 1.45; }
+

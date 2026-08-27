@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta charset="utf-8">
+  <title>SendHere · 传到这</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <span class="mark">↔</span>
+      <div><h1>SendHere</h1><p id="device-name">这台手机：正在设置名称…</p><p id="computer-name" class="muted">正在连接电脑…</p></div>
+    </header>
+    <section class="card">
+      <div class="section-title"><h2>发送到电脑</h2></div></h2>
+      <textarea id="text" placeholder="输入或粘贴文字、链接…"></textarea>
+      <div class="actions">
+        <button id="send-text" type="button">发送文字</button>
+        <label class="file-button">选择图片或文件
+          <input id="files" type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.7z,.txt">
+        </label>
+      </div>
+      <p id="upload-status" class="muted"></p>
+    </section>
+    <section class="card">
+      <h2>电脑发来的内容</h2>
+      <div id="incoming" class="empty">暂无</div>
+    </section>
+    <p class="privacy">数据仅在当前局域网设备之间传输，不上传云端。</p>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

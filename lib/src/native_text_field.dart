@@ -33,6 +33,7 @@ class NativeTextField extends StatefulWidget {
     required this.onSubmitted,
     required this.onFilesDropped,
     required this.onComposeChanged,
+    required this.onContentHeightChanged,
     required this.initialText,
     required this.composeItems,
     this.height = 96,
@@ -42,6 +43,7 @@ class NativeTextField extends StatefulWidget {
   final ValueChanged<String> onSubmitted;
   final ValueChanged<List<String>> onFilesDropped;
   final ValueChanged<List<NativeComposeItem>> onComposeChanged;
+  final ValueChanged<double> onContentHeightChanged;
   final String initialText;
   final List<NativeComposeItem> composeItems;
   final double height;
@@ -88,6 +90,9 @@ class NativeTextFieldState extends State<NativeTextField> {
           developer.log('Received ${paths.length} dropped file(s)',
               name: 'SendHere.Input');
           widget.onFilesDropped(paths);
+        case 'contentHeightChanged':
+          final height = (call.arguments as num?)?.toDouble();
+          if (height != null) widget.onContentHeightChanged(height);
         case 'composeChanged':
           final values = (call.arguments as List<dynamic>? ?? const [])
               .whereType<Map<dynamic, dynamic>>();

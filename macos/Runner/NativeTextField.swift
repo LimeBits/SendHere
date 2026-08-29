@@ -161,6 +161,7 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
         self.attachmentMetadata.removeAll()
         self.isApplyingCompose = false
         self.textView.needsDisplay = true
+        self.reportContentHeight()
         result(nil)
       case "setCompose":
         self.applyCompose(call.arguments as? [String: Any] ?? [:])
@@ -219,6 +220,16 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
     textView.setSelectedRange(NSRange(location: content.length, length: 0))
     isApplyingCompose = false
     textView.needsDisplay = true
+    reportContentHeight()
+  }
+
+  private func reportContentHeight() {
+    guard let container = textView.textContainer,
+          let layoutManager = textView.layoutManager else { return }
+    layoutManager.ensureLayout(for: container)
+    let usedHeight = layoutManager.usedRect(for: container).height
+    let height = ceil(usedHeight + textView.textContainerInset.height * 2)
+    channel.invokeMethod("contentHeightChanged", arguments: height)
   }
 
   private func composeFileImage(path: String, name: String) -> NSImage {
@@ -261,6 +272,7 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
     // One edit produces one state update. Sending a second textChanged event
     // here raced composeChanged and could force Flutter to rebuild the view.
     channel.invokeMethod("composeChanged", arguments: items)
+    reportContentHeight()
   }
 
   private func serializeCompose() -> [[String: String]] {

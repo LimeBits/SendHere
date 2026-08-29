@@ -850,8 +850,12 @@ class _ConversationPanel extends StatefulWidget {
 }
 
 class _ConversationPanelState extends State<_ConversationPanel> {
+  static const _minimumComposeHeight = 96.0;
+  static const _maximumComposeHeight = 180.0;
+
   final _nativeFieldKey = GlobalKey<NativeTextFieldState>();
   final _scrollController = ScrollController();
+  double _composeHeight = _minimumComposeHeight;
 
   @override
   void didUpdateWidget(covariant _ConversationPanel oldWidget) {
@@ -957,7 +961,16 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                             item.path!, path.basename(item.path!))
                         : NativeComposeItem.text(item.text!))
                     .toList(),
-                height: widget.pendingItems.isEmpty ? 96 : 180,
+                height: _composeHeight,
+                onContentHeightChanged: (contentHeight) {
+                  final nextHeight = contentHeight.clamp(
+                    _minimumComposeHeight,
+                    _maximumComposeHeight,
+                  );
+                  if ((nextHeight - _composeHeight).abs() > 0.5) {
+                    setState(() => _composeHeight = nextHeight);
+                  }
+                },
                 onFilesDropped: (paths) {
                   widget.addDroppedFiles(paths);
                   _focusInput();

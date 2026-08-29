@@ -15,6 +15,7 @@ import 'device_name.dart';
 import 'local_transfer_server.dart';
 import 'nearby_device_service.dart';
 import 'native_text_field.dart';
+import 'outbox.dart';
 import 'transfer_event.dart';
 
 class SendHereApp extends StatelessWidget {
@@ -41,6 +42,10 @@ class _SendHereHomeState extends State<SendHereHome> {
   final _nearby = NearbyDeviceService();
   final _connectedPeers = <String, _PeerDevice>{};
   final _drafts = <String, String>{};
+  final _pendingItems = <String, List<_PendingItem>>{};
+  final _outbox = Outbox();
+  final _sendingOutboxDeviceIds = <String>{};
+  Directory? _outboxDirectory;
   LocalTransferServer? _server;
   StreamSubscription<TransferEvent>? _subscription;
   StreamSubscription<List<NearbyDevice>>? _nearbySubscription;
@@ -56,7 +61,14 @@ class _SendHereHomeState extends State<SendHereHome> {
   @override
   void initState() {
     super.initState();
-    _loadRecentDevices().whenComplete(_startServer);
+    _loadInitialState().whenComplete(_startServer);
+  }
+
+  Future<void> _loadInitialState() async {
+    _outboxDirectory = await getApplicationSupportDirectory();
+    await _outbox.load();
+    _events.addAll(_outbox.items.map(_eventForOutbox));
+    await _loadRecentDevices();
   }
 
   Future<void> _loadRecentDevices() async {
@@ -137,6 +149,10 @@ class _SendHereHomeState extends State<SendHereHome> {
           }
         });
         _saveRecentDevices();
+        if (event.type == TransferEventType.clientConnected &&
+            event.deviceId != null) {
+          unawaited(_deliverOutbox(event.deviceId!));
+        }
         if (shouldCollapsePhoneQr && mounted) {
           setState(() => _phoneQrExpanded = false);
         }
@@ -256,40 +272,228 @@ class _SendHereHomeState extends State<SendHereHome> {
     }
   }
 
-  void _sendText() {
-    final text = _textController.text;
-    if (text.trim().isEmpty) return;
-    final peerId = _selectedPeerId;
-    if (peerId == null || _server == null || !_server!.hasDevice(peerId)) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('请先在左侧选择一台已连接的设备。')));
-      return;
+  Future<void> _offerFiles() async {
+    try {
+      final files = await openFiles();
+      await _addFilesToPending(files.map((file) => file.path).toList());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('无法添加文件：$error')));
+      }
     }
-    _server!.sendTextToDevice(peerId, text);
+  }
+
+  Future<void> _addFilesToPending(List<String> paths) async {
+    final peerId = _selectedPeerId;
+    if (peerId == null || paths.isEmpty) return;
+    final text = _textController.text;
     setState(() {
+      final items = _pendingItems.putIfAbsent(peerId, () => []);
+      if (text.trim().isNotEmpty) items.add(_PendingItem.text(text));
+      items.addAll(paths.map(_PendingItem.file));
       _drafts.remove(peerId);
       _textController.clear();
     });
   }
 
-  Future<void> _offerFiles() async {
+  void _replacePendingCompose(List<NativeComposeItem> composeItems) {
     final peerId = _selectedPeerId;
-    if (peerId == null || _server == null || !_server!.hasDevice(peerId)) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('请先在左侧选择一台已连接的设备。')));
+    if (peerId == null) return;
+    setState(() {
+      _pendingItems[peerId] = composeItems
+          .map((item) => item.text != null
+              ? _PendingItem.text(item.text!)
+              : _PendingItem.file(item.filePath!))
+          .toList();
+      _drafts.remove(peerId);
+      _textController.clear();
+    });
+  }
+
+  void _removePendingItem(int index) {
+    final peerId = _selectedPeerId;
+    final items = peerId == null ? null : _pendingItems[peerId];
+    if (items == null || index >= items.length) return;
+    setState(() => items.removeAt(index));
+  }
+
+  void _editPendingText(int index) {
+    final peerId = _selectedPeerId;
+    final items = peerId == null ? null : _pendingItems[peerId];
+    if (items == null || index >= items.length || items[index].text == null) {
       return;
     }
-    try {
-      final files = await openFiles();
-      for (final file in files) {
-        await _server!.offerFileToDevice(peerId, File(file.path));
-      }
-    } catch (error) {
+    final text = items[index].text!;
+    setState(() {
+      items.removeAt(index);
+      _textController.text = text;
+      _drafts[peerId!] = text;
+    });
+  }
+
+  Future<void> _sendPending() async {
+    final peerId = _selectedPeerId;
+    final device = peerId == null ? null : _connectedPeers[peerId];
+    final outboxDirectory = _outboxDirectory;
+    if (peerId == null || device == null || outboxDirectory == null) return;
+    final text = _textController.text;
+    if (text.trim().isNotEmpty) {
+      setState(() {
+        _pendingItems
+            .putIfAbsent(peerId, () => [])
+            .add(_PendingItem.text(text));
+        _drafts.remove(peerId);
+        _textController.clear();
+      });
+    }
+    final items = List<_PendingItem>.from(_pendingItems[peerId] ?? []);
+    if (items.isEmpty) return;
+    setState(() => _pendingItems.remove(peerId));
+    for (final item in items) {
+      final id = Outbox.newId();
+      final outboxItem = item.text != null
+          ? OutboxItem(
+              id: id,
+              deviceId: peerId,
+              deviceName: device.name,
+              createdAt: DateTime.now(),
+              type: TransferEventType.text,
+              text: item.text,
+              status: FileTransferStatus.waiting,
+            )
+          : await _outboxFileItem(
+              id, peerId, device.name, item.path!, outboxDirectory);
+      await _outbox.add(outboxItem);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('无法发送文件：$error')));
+        setState(() => _events.insert(0, _eventForOutbox(outboxItem)));
       }
     }
+    unawaited(_deliverOutbox(peerId));
+  }
+
+  Future<OutboxItem> _outboxFileItem(String id, String deviceId,
+      String deviceName, String sourcePath, Directory outboxDirectory) async {
+    final archived =
+        await _outbox.archiveFile(File(sourcePath), outboxDirectory);
+    return OutboxItem(
+      id: id,
+      deviceId: deviceId,
+      deviceName: deviceName,
+      createdAt: DateTime.now(),
+      type: TransferEventType.file,
+      filePath: archived.path,
+      fileName: path.basename(sourcePath),
+      fileSize: await archived.length(),
+      status: FileTransferStatus.waiting,
+    );
+  }
+
+  TransferEvent _eventForOutbox(OutboxItem item) => TransferEvent(
+        type: item.type,
+        direction: TransferDirection.sent,
+        createdAt: item.createdAt,
+        clientName: item.deviceName,
+        deviceId: item.deviceId,
+        text: item.text,
+        fileName: item.fileName,
+        fileSize: item.fileSize,
+        localPath: item.filePath,
+        transferId: item.id,
+        fileStatus: item.status,
+      );
+
+  Future<void> _deliverOutbox(String deviceId) async {
+    final server = _server;
+    if (server == null ||
+        !server.hasDevice(deviceId) ||
+        _sendingOutboxDeviceIds.contains(deviceId)) {
+      return;
+    }
+    _sendingOutboxDeviceIds.add(deviceId);
+    try {
+      final items = _outbox.items
+          .where((item) => item.deviceId == deviceId)
+          .toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      for (final item in items) {
+        if (!server.hasDevice(deviceId)) break;
+        try {
+          await _setOutboxStatus(item, FileTransferStatus.uploading);
+          if (item.isFile) {
+            final file = File(item.filePath!);
+            if (!await file.exists()) {
+              throw StateError('待发送文件已不存在');
+            }
+            await server.offerFileToDevice(
+              deviceId,
+              file,
+              transferId: item.id,
+              fileName: item.fileName,
+            );
+          } else {
+            await server.sendTextToDevice(
+              deviceId,
+              item.text!,
+              transferId: item.id,
+            );
+          }
+          await _outbox.remove(item.id);
+          // A phone receives a download URL, not the file bytes. Its browser may
+          // download much later, so retain the archived source while this app is
+          // running. Mac-to-Mac uploads have completed at this point and can be
+          // safely removed.
+          if (item.isFile && server.hasPeer(deviceId)) {
+            await _deleteArchivedFile(item.filePath!);
+          }
+        } catch (error) {
+          await _setOutboxStatus(
+            item,
+            FileTransferStatus.failed,
+            errorMessage: '$error',
+          );
+          break;
+        }
+      }
+    } finally {
+      _sendingOutboxDeviceIds.remove(deviceId);
+    }
+  }
+
+  Future<void> _setOutboxStatus(
+    OutboxItem item,
+    FileTransferStatus status, {
+    String? errorMessage,
+  }) async {
+    await _outbox.updateStatus(item.id, status);
+    if (!mounted) return;
+    final index = _events.indexWhere((event) => event.transferId == item.id);
+    if (index < 0) return;
+    setState(() {
+      _events[index] = TransferEvent(
+        type: item.type,
+        direction: TransferDirection.sent,
+        createdAt: item.createdAt,
+        clientName: item.deviceName,
+        deviceId: item.deviceId,
+        text: item.text,
+        fileName: item.fileName,
+        fileSize: item.fileSize,
+        localPath: item.filePath,
+        transferId: item.id,
+        fileStatus: status,
+        errorMessage: errorMessage,
+      );
+    });
+  }
+
+  Future<void> _deleteArchivedFile(String filePath) async {
+    final root = _outboxDirectory;
+    if (root == null) return;
+    final archiveDirectory = path.join(root.path, 'outbox');
+    if (!path.isWithin(archiveDirectory, filePath)) return;
+    final file = File(filePath);
+    if (await file.exists()) await file.delete();
   }
 
   Future<void> _selectPeer(String id) async {
@@ -360,8 +564,16 @@ class _SendHereHomeState extends State<SendHereHome> {
                       child: _ConversationPanel(
                         controller: _textController,
                         events: _events,
-                        sendText: _sendText,
+                        sendPending: _sendPending,
                         offerFiles: _offerFiles,
+                        pendingItems: _selectedPeerId == null
+                            ? const []
+                            : List.unmodifiable(
+                                _pendingItems[_selectedPeerId] ?? const []),
+                        removePendingItem: _removePendingItem,
+                        editPendingText: _editPendingText,
+                        addDroppedFiles: _addFilesToPending,
+                        replacePendingCompose: _replacePendingCompose,
                         selectedPeerId: _selectedPeerId,
                         selectedPeerName: _selectedPeerId == null
                             ? null
@@ -381,6 +593,17 @@ class _SendHereHomeState extends State<SendHereHome> {
       ),
     );
   }
+}
+
+class _PendingItem {
+  const _PendingItem._({this.text, this.path});
+
+  factory _PendingItem.text(String value) => _PendingItem._(text: value);
+  factory _PendingItem.file(String value) => _PendingItem._(path: value);
+
+  final String? text;
+  final String? path;
+  bool get isFile => path != null;
 }
 
 class _PeerDevice {
@@ -593,8 +816,13 @@ class _ConversationPanel extends StatefulWidget {
   const _ConversationPanel({
     required this.controller,
     required this.events,
-    required this.sendText,
+    required this.sendPending,
     required this.offerFiles,
+    required this.pendingItems,
+    required this.removePendingItem,
+    required this.editPendingText,
+    required this.addDroppedFiles,
+    required this.replacePendingCompose,
     required this.selectedPeerId,
     required this.selectedPeerName,
     required this.online,
@@ -604,8 +832,13 @@ class _ConversationPanel extends StatefulWidget {
 
   final TextEditingController controller;
   final List<TransferEvent> events;
-  final VoidCallback sendText;
+  final Future<void> Function() sendPending;
   final Future<void> Function() offerFiles;
+  final List<_PendingItem> pendingItems;
+  final ValueChanged<int> removePendingItem;
+  final ValueChanged<int> editPendingText;
+  final ValueChanged<List<String>> addDroppedFiles;
+  final ValueChanged<List<NativeComposeItem>> replacePendingCompose;
   final String? selectedPeerId;
   final String? selectedPeerName;
   final bool online;
@@ -644,17 +877,22 @@ class _ConversationPanelState extends State<_ConversationPanel> {
     super.dispose();
   }
 
+  void _focusInput() {
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _nativeFieldKey.currentState?.focus());
+  }
+
   void _submit(String value) {
     developer.log('Submitting ${value.length} characters',
         name: 'SendHere.Input');
     widget.controller.text = value;
-    widget.sendText();
-    if (widget.controller.text.isEmpty) {
-      widget.onDraftChanged('');
-      // AppKit platform views can retain their drawing after Flutter clears the
-      // draft. Clear the currently mounted NSTextView directly as well.
-      _nativeFieldKey.currentState?.clear();
-    }
+    // Sending is always an enqueue operation. The input must therefore clear
+    // identically whether the device is connected now or will receive it later.
+    unawaited(widget.sendPending());
+    widget.onDraftChanged('');
+    // AppKit platform views can retain their drawing after Flutter clears the
+    // draft. Clear the currently mounted NSTextView directly as well.
+    _nativeFieldKey.currentState?.clear();
   }
 
   @override
@@ -700,15 +938,31 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                 ),
         ),
         const Divider(height: 1),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-          child: IgnorePointer(
-            ignoring: !widget.online,
-            child: Opacity(
-              opacity: widget.online ? 1 : 0.45,
+        Container(
+          margin: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerLowest,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.black26),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
               child: NativeTextField(
                 key: _nativeFieldKey,
                 initialText: widget.draft,
+                composeItems: widget.pendingItems
+                    .map((item) => item.isFile
+                        ? NativeComposeItem.file(
+                            item.path!, path.basename(item.path!))
+                        : NativeComposeItem.text(item.text!))
+                    .toList(),
+                height: widget.pendingItems.isEmpty ? 96 : 180,
+                onFilesDropped: (paths) {
+                  widget.addDroppedFiles(paths);
+                  _focusInput();
+                },
+                onComposeChanged: widget.replacePendingCompose,
                 onChanged: (value) {
                   widget.controller.text = value;
                   widget.onDraftChanged(value);
@@ -716,23 +970,25 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                 onSubmitted: _submit,
               ),
             ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Row(children: [
-            IconButton(
-              tooltip: '发送文件',
-              onPressed: widget.online ? widget.offerFiles : null,
-              icon: const Icon(Icons.attach_file),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(6, 0, 8, 4),
+              child: Row(children: [
+                IconButton(
+                  tooltip: '发送文件',
+                  onPressed: () async {
+                    await widget.offerFiles();
+                    _focusInput();
+                  },
+                  icon: const Icon(Icons.attach_file),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                    onPressed: () => _submit(widget.controller.text),
+                    icon: const Icon(Icons.send),
+                    label: const Text('发送')),
+              ]),
             ),
-            const Spacer(),
-            FilledButton.icon(
-                onPressed: widget.online
-                    ? () => _submit(widget.controller.text)
-                    : null,
-                icon: const Icon(Icons.send),
-                label: const Text('发送')),
           ]),
         ),
       ]),
@@ -812,10 +1068,11 @@ class _MessageBubble extends StatelessWidget {
   }
 
   String _messageStatus(bool sent, TransferEvent event, String time) {
-    if (sent && event.type == TransferEventType.file) {
+    if (sent && event.transferId != null) {
       return switch (event.fileStatus) {
+        FileTransferStatus.waiting => '等待设备上线 · $time',
         FileTransferStatus.uploading => '正在发送 · $time',
-        FileTransferStatus.completed => '已发送 · $time',
+        FileTransferStatus.completed => '已送达 · $time',
         FileTransferStatus.failed => '发送失败 · $time',
       };
     }
@@ -846,21 +1103,24 @@ class _TransferProgress extends StatelessWidget {
     final total = event.fileSize ?? 0;
     final sent = event.bytesTransferred ?? 0;
     final progress = total == 0 ? 0.0 : (sent / total).clamp(0.0, 1.0);
+    final waiting = event.fileStatus == FileTransferStatus.waiting;
     final failed = event.fileStatus == FileTransferStatus.failed;
     final completed = event.fileStatus == FileTransferStatus.completed;
     final color = failed
         ? Theme.of(context).colorScheme.error
         : Theme.of(context).colorScheme.primary;
-    final label = failed
-        ? '发送失败${event.errorMessage == null ? '' : '：${event.errorMessage}'}'
-        : completed
-            ? '已发送 · ${_formatBytes(total)}'
-            : '发送中 ${(progress * 100).round()}% · ${_formatBytes(sent)} / ${_formatBytes(total)}';
+    final label = waiting
+        ? '等待设备上线'
+        : failed
+            ? '发送失败${event.errorMessage == null ? '' : '：${event.errorMessage}'}'
+            : completed
+                ? '已送达 · ${_formatBytes(total)}'
+                : '发送中 ${(progress * 100).round()}% · ${_formatBytes(sent)} / ${_formatBytes(total)}';
     return SizedBox(
       width: 280,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         LinearProgressIndicator(
-          value: completed || failed ? 1 : progress,
+          value: waiting ? null : (completed || failed ? 1 : progress),
           minHeight: 5,
           borderRadius: BorderRadius.circular(4),
           color: color,

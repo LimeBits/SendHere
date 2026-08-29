@@ -27,7 +27,7 @@ class LocalTransferServer {
   final Future<List<int>> Function(String asset) _loadAsset;
   final _events = StreamController<TransferEvent>.broadcast();
   final _sockets = <WebSocketChannel>{};
-  final _files = <String, File>{};
+  final _files = <String, _DownloadFile>{};
   final _clients = <WebSocketChannel, String>{};
   final _clientIds = <WebSocketChannel, String>{};
   final _peerTokens = <String, DateTime>{};
@@ -269,15 +269,15 @@ class LocalTransferServer {
 
   Future<Response> _handleDownload(Request request, String id) async {
     if (!_isAuthorized(request)) return _forbidden();
-    final file = _files[id];
-    if (file == null || !await file.exists()) {
+    final download = _files[id];
+    if (download == null || !await download.file.exists()) {
       return Response.notFound('File not found.');
     }
-    return Response.ok(file.openRead(), headers: {
+    return Response.ok(download.file.openRead(), headers: {
       'content-type': 'application/octet-stream',
       'content-disposition':
-          'attachment; filename="${path.basename(file.path)}"',
-      'content-length': (await file.length()).toString(),
+          'attachment; filename="${_contentDispositionFilename(download.name)}"',
+      'content-length': (await download.file.length()).toString(),
     });
   }
 
@@ -395,48 +395,61 @@ class LocalTransferServer {
     }
   }
 
-  void sendTextToDevice(String deviceId, String text) {
+  Future<void> sendTextToDevice(String deviceId, String text,
+      {String? transferId}) async {
     if (text.trim().isEmpty) return;
     final socket = _sockets.cast<WebSocketChannel?>().firstWhere(
         (candidate) => candidate != null && _clientIds[candidate] == deviceId,
         orElse: () => null);
-    if (socket == null) return;
+    if (socket == null) throw StateError('设备未连接');
     _events.add(TransferEvent(
         type: TransferEventType.text,
         direction: TransferDirection.sent,
         createdAt: DateTime.now(),
         text: text,
         clientName: _clients[socket],
-        deviceId: deviceId));
+        deviceId: deviceId,
+        transferId: transferId));
     socket.sink.add(jsonEncode(_peerSockets[deviceId] == socket
-        ? {'type': 'peer_text', 'text': text}
-        : {'type': 'desktop_text', 'text': text}));
+        ? {'type': 'peer_text', 'text': text, 'transferId': transferId}
+        : {'type': 'desktop_text', 'text': text, 'transferId': transferId}));
   }
 
-  Future<void> offerFileToDevice(String deviceId, File file) async {
+  Future<void> offerFileToDevice(String deviceId, File file,
+      {String? transferId, String? fileName}) async {
     final socket = _sockets.cast<WebSocketChannel?>().firstWhere(
         (candidate) => candidate != null && _clientIds[candidate] == deviceId,
         orElse: () => null);
     if (socket == null) throw StateError('设备未连接');
     if (_peerSockets[deviceId] == socket) {
-      await sendFileToPeer(deviceId, file);
+      await sendFileToPeer(
+        deviceId,
+        file,
+        transferId: transferId,
+        fileName: fileName,
+      );
       return;
     }
     final id = _newToken();
-    _files[id] = file;
+    final displayName = fileName ?? path.basename(file.path);
+    // `file.path` may be an outbox archive with a random prefix. Keep the
+    // original display name separate so the phone downloads the expected name.
+    _files[id] = _DownloadFile(file: file, name: displayName);
     _events.add(TransferEvent(
         type: TransferEventType.file,
         direction: TransferDirection.sent,
         createdAt: DateTime.now(),
-        fileName: path.basename(file.path),
+        fileName: displayName,
         fileSize: await file.length(),
         clientName: _clients[socket],
         deviceId: deviceId,
-        localPath: file.path));
+        localPath: file.path,
+        transferId: transferId));
     socket.sink.add(jsonEncode({
       'type': 'desktop_file',
-      'fileName': path.basename(file.path),
+      'fileName': displayName,
       'downloadPath': '/api/download/$id',
+      'transferId': transferId,
     }));
   }
 
@@ -453,15 +466,16 @@ class LocalTransferServer {
     socket.sink.add(jsonEncode({'type': 'peer_text', 'text': text}));
   }
 
-  Future<void> sendFileToPeer(String deviceId, File file) async {
+  Future<void> sendFileToPeer(String deviceId, File file,
+      {String? transferId, String? fileName}) async {
     if (!hasPeer(deviceId)) throw StateError('设备未连接');
     final session = await _ensurePeerUploadSession(deviceId);
     if (session == null) throw StateError('无法获取设备的文件传输会话');
-    final filename = path.basename(file.path);
+    final filename = fileName ?? path.basename(file.path);
     final size = await file.length();
-    final transferId = _newToken();
+    final id = transferId ?? _newToken();
     _emitFileTransfer(
-      transferId: transferId,
+      transferId: id,
       deviceId: deviceId,
       deviceName: session.deviceName,
       file: file,
@@ -490,7 +504,7 @@ class LocalTransferServer {
         StreamTransformer.fromHandlers(handleData: (chunk, sink) {
           bytesTransferred += chunk.length;
           _emitFileTransfer(
-            transferId: transferId,
+            transferId: id,
             deviceId: deviceId,
             deviceName: session.deviceName,
             file: file,
@@ -508,7 +522,7 @@ class LocalTransferServer {
       }
       await response.drain();
       _emitFileTransfer(
-        transferId: transferId,
+        transferId: id,
         deviceId: deviceId,
         deviceName: session.deviceName,
         file: file,
@@ -519,7 +533,7 @@ class LocalTransferServer {
       );
     } catch (error) {
       _emitFileTransfer(
-        transferId: transferId,
+        transferId: id,
         deviceId: deviceId,
         deviceName: session.deviceName,
         file: file,
@@ -574,18 +588,19 @@ class LocalTransferServer {
 
   Future<void> offerFileToPhone(File file) async {
     final id = _newToken();
-    _files[id] = file;
+    final fileName = path.basename(file.path);
+    _files[id] = _DownloadFile(file: file, name: fileName);
     _events.add(TransferEvent(
         type: TransferEventType.file,
         direction: TransferDirection.sent,
         createdAt: DateTime.now(),
-        fileName: path.basename(file.path),
+        fileName: fileName,
         fileSize: await file.length(),
         clientName: connectedDeviceNames,
         localPath: file.path));
     _broadcast({
       'type': 'desktop_file',
-      'fileName': path.basename(file.path),
+      'fileName': fileName,
       'downloadPath': '/api/download/$id'
     });
   }
@@ -698,6 +713,9 @@ class LocalTransferServer {
     return candidate;
   }
 
+  String _contentDispositionFilename(String name) =>
+      name.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+
   String? _boundaryFrom(String? contentType) {
     if (contentType == null) return null;
     return HeaderValue.parse(contentType).parameters['boundary'];
@@ -709,6 +727,13 @@ class LocalTransferServer {
   static String _newToken() => base64UrlEncode(
           List<int>.generate(32, (_) => Random.secure().nextInt(256)))
       .replaceAll('=', '');
+}
+
+class _DownloadFile {
+  const _DownloadFile({required this.file, required this.name});
+
+  final File file;
+  final String name;
 }
 
 class _PeerEndpoint {

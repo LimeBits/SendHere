@@ -2,7 +2,7 @@ enum TransferEventType { text, file, clientConnected, clientDisconnected }
 
 enum TransferDirection { received, sent }
 
-enum FileTransferStatus { uploading, completed, failed }
+enum FileTransferStatus { waiting, uploading, completed, failed }
 
 class TransferEvent {
   const TransferEvent({

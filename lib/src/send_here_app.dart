@@ -49,7 +49,7 @@ class _SendHereHomeState extends State<SendHereHome> {
   String? _address;
   String? _error;
   String? _selectedPeerId;
-  bool _phoneConnectDialogOpen = false;
+  bool _phoneQrExpanded = false;
 
   static const _recentDevicesKey = 'sendhere-recent-devices';
 
@@ -98,7 +98,7 @@ class _SendHereHomeState extends State<SendHereHome> {
       await server.start();
       _subscription = server.events.listen((event) {
         if (!mounted) return;
-        final shouldClosePhoneDialog = _phoneConnectDialogOpen &&
+        final shouldCollapsePhoneQr = _phoneQrExpanded &&
             event.type == TransferEventType.clientConnected &&
             !event.isComputerPeer;
         setState(() {
@@ -137,11 +137,8 @@ class _SendHereHomeState extends State<SendHereHome> {
           }
         });
         _saveRecentDevices();
-        if (shouldClosePhoneDialog) {
-          _phoneConnectDialogOpen = false;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) Navigator.of(context, rootNavigator: true).pop();
-          });
+        if (shouldCollapsePhoneQr && mounted) {
+          setState(() => _phoneQrExpanded = false);
         }
       });
       await _nearby.start(port: server.port);
@@ -307,17 +304,16 @@ class _SendHereHomeState extends State<SendHereHome> {
     });
   }
 
-  void _showPhoneConnectDialog() {
-    final url = _url;
-    if (url == null) return;
-    _phoneConnectDialogOpen = true;
-    showDialog<void>(
-      context: context,
-      builder: (_) => _AddDeviceDialog(url: url),
-    ).whenComplete(() {
-      if (mounted) _phoneConnectDialogOpen = false;
-    });
+  void _showPhoneConnectPanel() {
+    final server = _server;
+    if (server == null || _address == null) return;
+    // Never present a QR code that may have expired while the app was open.
+    // This deliberately keeps existing phone sessions alive.
+    server.refreshToken(disconnectExisting: false);
+    setState(() => _phoneQrExpanded = true);
   }
+
+  void _hidePhoneConnectPanel() => setState(() => _phoneQrExpanded = false);
 
   @override
   void dispose() {
@@ -354,7 +350,9 @@ class _SendHereHomeState extends State<SendHereHome> {
                         connectedPeers: _connectedPeers.values.toList(),
                         selectedPeerId: _selectedPeerId,
                         selectPeer: _selectPeer,
-                        connectPhone: _showPhoneConnectDialog,
+                        connectPhone: _showPhoneConnectPanel,
+                        phoneQrExpanded: _phoneQrExpanded,
+                        hidePhoneQr: _hidePhoneConnectPanel,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -427,6 +425,8 @@ class _DeviceSidebar extends StatelessWidget {
     required this.selectedPeerId,
     required this.selectPeer,
     required this.connectPhone,
+    required this.phoneQrExpanded,
+    required this.hidePhoneQr,
   });
 
   final String url;
@@ -434,6 +434,8 @@ class _DeviceSidebar extends StatelessWidget {
   final String? selectedPeerId;
   final ValueChanged<String> selectPeer;
   final VoidCallback connectPhone;
+  final bool phoneQrExpanded;
+  final VoidCallback hidePhoneQr;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -469,13 +471,19 @@ class _DeviceSidebar extends StatelessWidget {
                   ),
           ),
           const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: FilledButton.icon(
-              onPressed: connectPhone,
-              icon: const Icon(Icons.add),
-              label: const Text('连接手机'),
-            ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            child: phoneQrExpanded
+                ? _PhoneConnectCard(url: url, onCollapse: hidePhoneQr)
+                : Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: FilledButton.icon(
+                      onPressed: connectPhone,
+                      icon: const Icon(Icons.phone_iphone_outlined),
+                      label: const Text('连接手机'),
+                    ),
+                  ),
           ),
         ]),
       );
@@ -533,32 +541,51 @@ class _DeviceTile extends StatelessWidget {
   }
 }
 
-class _AddDeviceDialog extends StatelessWidget {
-  const _AddDeviceDialog({required this.url});
+class _PhoneConnectCard extends StatelessWidget {
+  const _PhoneConnectCard({required this.url, required this.onCollapse});
 
   final String url;
+  final VoidCallback onCollapse;
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-        title: const Text('连接手机'),
-        content: SizedBox(
-          width: 440,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('附近运行 SendHere 的电脑会自动出现在设备列表中。'),
-            const SizedBox(height: 18),
-            const Text('使用手机浏览器或微信扫描二维码，无需安装手机 App。'),
-            const SizedBox(height: 12),
-            QrImageView(data: url, size: 190),
-            const SizedBox(height: 10),
-            SelectableText(url,
-                style: Theme.of(context).textTheme.bodySmall,
-                textAlign: TextAlign.center),
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            const Icon(Icons.phone_iphone_outlined, size: 18),
+            const SizedBox(width: 7),
+            const Expanded(
+              child: Text('连接手机',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            ),
+            IconButton(
+              tooltip: '收起',
+              icon: const Icon(Icons.keyboard_arrow_down),
+              visualDensity: VisualDensity.compact,
+              onPressed: onCollapse,
+            ),
           ]),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text('关闭'))
-        ],
+          const SizedBox(height: 2),
+          const Text('用系统相机或微信扫一扫，无需安装 App。',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.black54)),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.black12),
+            ),
+            child: QrImageView(data: url, size: 132),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: onCollapse,
+            icon: const Icon(Icons.keyboard_arrow_down, size: 18),
+            label: const Text('收起二维码'),
+          ),
+        ]),
       );
 }
 

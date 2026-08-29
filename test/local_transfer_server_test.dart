@@ -46,6 +46,35 @@ void main() {
     expect((await request.close()).statusCode, HttpStatus.ok);
   });
 
+  test('opening a new QR token immediately replaces an old QR token', () async {
+    final directory = await Directory.systemTemp.createTemp('sendhere-test-');
+    final server = LocalTransferServer(
+      downloadDirectory: directory,
+      loadAsset: (asset) => File(asset).readAsBytes(),
+    );
+    addTearDown(() async {
+      await server.stop();
+      await directory.delete(recursive: true);
+    });
+
+    await server.start();
+    final client = HttpClient();
+    addTearDown(client.close);
+    final base = Uri.parse('http://127.0.0.1:${server.port}');
+    final oldToken = server.token;
+    server.refreshToken(disconnectExisting: false);
+    final newToken = server.token;
+    expect(newToken, isNot(oldToken));
+
+    final oldLink = await client
+        .getUrl(base.replace(path: '/', queryParameters: {'token': oldToken}));
+    expect(await utf8.decodeStream(await oldLink.close()), contains('连接已过期'));
+
+    final newLink = await client
+        .getUrl(base.replace(path: '/', queryParameters: {'token': newToken}));
+    expect((await newLink.close()).statusCode, HttpStatus.ok);
+  });
+
   test('accepts direct binary file uploads for mobile web views', () async {
     final directory = await Directory.systemTemp.createTemp('sendhere-test-');
     final server = LocalTransferServer(

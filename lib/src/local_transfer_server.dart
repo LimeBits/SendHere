@@ -95,11 +95,14 @@ class LocalTransferServer {
     _server = null;
   }
 
-  void refreshToken() {
+  void refreshToken({bool disconnectExisting = true}) {
     _token = _newToken();
-    _expiresAt = DateTime.now().add(const Duration(minutes: 30));
-    // Existing sockets were authorized by the previous QR code. Closing them
-    // makes refresh a real revocation action rather than just a new link.
+    // A phone may take a while to open the system camera result, especially
+    // after waking from the lock screen. The link is still local-network-only,
+    // and each newly opened QR dialog gets its own token.
+    _expiresAt = DateTime.now().add(const Duration(hours: 2));
+    if (!disconnectExisting) return;
+    // Explicit revocation closes phone sessions authorized by the old QR code.
     for (final socket in _sockets.toList()) {
       socket.sink.close(WebSocketStatus.policyViolation, 'QR code refreshed');
     }

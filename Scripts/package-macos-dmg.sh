@@ -6,6 +6,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="SendHere"
 APP_PATH="${ROOT_DIR}/build/macos/Build/Products/Release/${APP_NAME}.app"
 DIST_DIR="${SENDHERE_DIST_DIR:-${ROOT_DIR}/dist}"
+# Set SENDHERE_SIGNING_IDENTITY to a Developer ID Application certificate for
+# distributable builds. Without it Flutter's nested framework signature can be
+# invalid after packaging, which macOS reports to recipients as “damaged”.
+SIGNING_IDENTITY="${SENDHERE_SIGNING_IDENTITY:-}"
 VERSION="$(grep '^version:' "${ROOT_DIR}/pubspec.yaml" | awk '{print $2}' | cut -d+ -f1)"
 BUILD="$(grep '^version:' "${ROOT_DIR}/pubspec.yaml" | awk '{print $2}' | cut -d+ -f2)"
 STAMP="$(date '+%Y%m%d-%H%M')"
@@ -20,6 +24,14 @@ fi
 if [[ ! -d "${APP_PATH}" ]]; then
   printf 'error: Flutter macOS app not found: %s\n' "${APP_PATH}" >&2
   exit 1
+fi
+
+if [[ -n "${SIGNING_IDENTITY}" ]]; then
+  printf '→ Signing app with %s\n' "${SIGNING_IDENTITY}"
+  codesign --force --deep --options runtime --sign "${SIGNING_IDENTITY}" "${APP_PATH}"
+  codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+else
+  printf 'warning: no Developer ID signing identity configured; this DMG may be blocked by Gatekeeper.\n' >&2
 fi
 
 mkdir -p "${DIST_DIR}"

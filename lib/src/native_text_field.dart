@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -32,7 +34,10 @@ class NativeTextField extends StatefulWidget {
 class NativeTextFieldState extends State<NativeTextField> {
   MethodChannel? _channel;
 
-  Future<void> clear() async => _channel?.invokeMethod<void>('setText', '');
+  Future<void> clear() async {
+    developer.log('Clearing native text field', name: 'SendHere.Input');
+    await _channel?.invokeMethod<void>('setText', '');
+  }
 
   void _attach(int id) {
     final channel = MethodChannel('sendhere/native_text_field/$id');
@@ -47,6 +52,9 @@ class NativeTextFieldState extends State<NativeTextField> {
       return null;
     });
     _channel = channel;
+    developer.log(
+        'Attached native text field with ${widget.initialText.length} characters',
+        name: 'SendHere.Input');
     channel.invokeMethod<void>('setText', widget.initialText);
   }
 
@@ -54,6 +62,9 @@ class NativeTextFieldState extends State<NativeTextField> {
   void didUpdateWidget(covariant NativeTextField oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.initialText != widget.initialText) {
+      developer.log(
+          'Updating native text field: ${oldWidget.initialText.length} → ${widget.initialText.length} characters',
+          name: 'SendHere.Input');
       _channel?.invokeMethod<void>('setText', widget.initialText);
     }
   }

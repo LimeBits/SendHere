@@ -10,6 +10,16 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
+    let deviceNameChannel = FlutterMethodChannel(
+      name: "sendhere/device_name", binaryMessenger: flutterViewController.engine.binaryMessenger)
+    deviceNameChannel.setMethodCallHandler { call, result in
+      guard call.method == "get" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      result(Host.current().localizedName)
+    }
+
     let registrar = flutterViewController.registrar(forPlugin: "NativeTextField")
     registrar.register(
       NativeTextViewFactory(messenger: registrar.messenger),

@@ -46,6 +46,35 @@ void main() {
     expect((await request.close()).statusCode, HttpStatus.ok);
   });
 
+  test('accepts direct binary file uploads for mobile web views', () async {
+    final directory = await Directory.systemTemp.createTemp('sendhere-test-');
+    final server = LocalTransferServer(
+      downloadDirectory: directory,
+      loadAsset: (asset) => File(asset).readAsBytes(),
+    );
+    addTearDown(() async {
+      await server.stop();
+      await directory.delete(recursive: true);
+    });
+
+    await server.start();
+    final client = HttpClient();
+    addTearDown(client.close);
+    final base = Uri.parse('http://127.0.0.1:${server.port}');
+    final request = await client.postUrl(base.replace(
+        path: '/api/upload', queryParameters: {'token': server.token}));
+    request.headers
+      ..set('x-sendhere-client-name', Uri.encodeComponent('微信 iPhone · TEST'))
+      ..set('x-sendhere-device-id', 'wechat-test')
+      ..set('x-sendhere-file-name', Uri.encodeComponent('微信图片.jpg'))
+      ..contentType = ContentType('image', 'jpeg');
+    request.add([1, 2, 3, 4]);
+
+    expect((await request.close()).statusCode, HttpStatus.ok);
+    final uploaded = File('${directory.path}${Platform.pathSeparator}微信图片.jpg');
+    expect(await uploaded.readAsBytes(), [1, 2, 3, 4]);
+  });
+
   test('peer session token does not replace the QR token', () async {
     final directory = await Directory.systemTemp.createTemp('sendhere-test-');
     final server = LocalTransferServer(

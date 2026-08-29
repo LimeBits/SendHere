@@ -42,7 +42,7 @@ final class StatusBarController: NSObject {
     guard let statusItem else { return }
     let menu = NSMenu()
     let open = NSMenuItem(
-      title: "打开 SendHere 窗口", action: #selector(showMainWindow), keyEquivalent: "")
+      title: "打开 SendHere", action: #selector(showMainWindow), keyEquivalent: "")
     let quit = NSMenuItem(title: "退出 SendHere", action: #selector(quitApp), keyEquivalent: "q")
     for menuItem in [open, quit] {
       menuItem.target = self
@@ -77,39 +77,39 @@ final class StatusBarController: NSObject {
 
     guard let context = NSGraphicsContext.current else { return nil }
     context.shouldAntialias = true
-    // Status-bar artwork follows Apple's template-image convention: macOS
-    // supplies the correct light/dark tint. The mark mirrors the web icon:
-    // a rounded square containing two separate, opposing horizontal arrows.
-    NSColor.labelColor.setStroke()
-    let body = NSBezierPath(
-      roundedRect: NSRect(x: 1.1, y: 1.1, width: 13.8, height: 13.8),
-      xRadius: 3.8,
-      yRadius: 3.8)
-    body.lineWidth = 1.35
-    body.stroke()
+    // A light rounded-square background restores the recognisable app mark.
+    // The transfer symbol is cut out with clear blending, revealing the actual
+    // menu-bar behind it rather than using a second, fixed arrow colour.
+    // Use the subdued system-control grey instead of pure white so the badge
+    // sits with Sonoma's other menu-bar controls rather than looking self-lit.
+    NSColor(calibratedWhite: 0.84, alpha: 1).setFill()
+    NSBezierPath(
+      roundedRect: NSRect(x: 0.6, y: 0.6, width: 14.8, height: 14.8),
+      xRadius: 4.1,
+      yRadius: 4.1).fill()
 
-    let arrows = NSBezierPath()
-    arrows.lineWidth = 1.65
-    arrows.lineCapStyle = .round
-    arrows.lineJoinStyle = .round
+    let arrow = NSBezierPath()
+    arrow.lineWidth = 1.55
+    arrow.lineCapStyle = .round
+    arrow.lineJoinStyle = .round
 
-    // Top lane: transfer to the right.
-    arrows.move(to: NSPoint(x: 4.1, y: 9.7))
-    arrows.line(to: NSPoint(x: 11.9, y: 9.7))
-    arrows.move(to: NSPoint(x: 9.7, y: 11.8))
-    arrows.line(to: NSPoint(x: 12.0, y: 9.7))
-    arrows.line(to: NSPoint(x: 9.7, y: 7.6))
+    // One shaft with wide-open arrowheads at its ends.
+    // Extend the shaft through both tips to keep all three strokes visually
+    // connected at small menu-bar sizes.
+    arrow.move(to: NSPoint(x: 3.5, y: 8.0))
+    arrow.line(to: NSPoint(x: 12.5, y: 8.0))
+    arrow.move(to: NSPoint(x: 5.6, y: 9.9))
+    arrow.line(to: NSPoint(x: 3.5, y: 8.0))
+    arrow.line(to: NSPoint(x: 5.6, y: 6.1))
+    arrow.move(to: NSPoint(x: 10.4, y: 9.9))
+    arrow.line(to: NSPoint(x: 12.5, y: 8.0))
+    arrow.line(to: NSPoint(x: 10.4, y: 6.1))
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current?.compositingOperation = .clear
+    arrow.stroke()
+    NSGraphicsContext.restoreGraphicsState()
 
-    // Bottom lane: transfer to the left. Keep it visibly separate from the
-    // upper arrow rather than merging them into a single bidirectional line.
-    arrows.move(to: NSPoint(x: 11.9, y: 6.3))
-    arrows.line(to: NSPoint(x: 4.1, y: 6.3))
-    arrows.move(to: NSPoint(x: 6.3, y: 8.4))
-    arrows.line(to: NSPoint(x: 4.0, y: 6.3))
-    arrows.line(to: NSPoint(x: 6.3, y: 4.2))
-    arrows.stroke()
-
-    image.isTemplate = true
+    image.isTemplate = false
     return image
   }
 }

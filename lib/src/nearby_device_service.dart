@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:bonsoir/bonsoir.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'device_name.dart';
+
 class NearbyDevice {
   const NearbyDevice({
     required this.id,
@@ -40,7 +42,7 @@ class NearbyDeviceService {
       deviceId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
       await preferences.setString('sendhere-device-id', deviceId!);
     }
-    deviceName = Platform.localHostname;
+    deviceName = await DeviceName.current();
 
     final service = BonsoirService(
       name: deviceName!,

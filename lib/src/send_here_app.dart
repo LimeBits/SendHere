@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
@@ -10,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'device_name.dart';
 import 'local_transfer_server.dart';
 import 'nearby_device_service.dart';
 import 'native_text_field.dart';
@@ -42,12 +44,13 @@ class _SendHereHomeState extends State<SendHereHome> {
   LocalTransferServer? _server;
   StreamSubscription<TransferEvent>? _subscription;
   StreamSubscription<List<NearbyDevice>>? _nearbySubscription;
-  List<NearbyDevice> _nearbyDevices = const [];
+  final _connectingPeerIds = <String>{};
+  final _discoveredComputerIds = <String>{};
   String? _address;
   String? _error;
   String? _selectedPeerId;
-  bool _connectingPeer = false;
-  bool _addDeviceDialogOpen = false;
+  bool _phoneConnectDialogOpen = false;
+
   static const _recentDevicesKey = 'sendhere-recent-devices';
 
   @override
@@ -89,12 +92,27 @@ class _SendHereHomeState extends State<SendHereHome> {
       final downloads = await getDownloadsDirectory() ??
           await getApplicationDocumentsDirectory();
       final server = LocalTransferServer(
-          downloadDirectory: Directory(path.join(downloads.path, 'SendHere')));
+        downloadDirectory: Directory(path.join(downloads.path, 'SendHere')),
+        deviceName: await DeviceName.current(),
+      );
       await server.start();
       _subscription = server.events.listen((event) {
         if (!mounted) return;
+        final shouldClosePhoneDialog = _phoneConnectDialogOpen &&
+            event.type == TransferEventType.clientConnected &&
+            !event.isComputerPeer;
         setState(() {
-          _events.insert(0, event);
+          final existingIndex = event.transferId == null
+              ? -1
+              : _events.indexWhere(
+                  (previous) => previous.transferId == event.transferId);
+          if (existingIndex >= 0) {
+            // Progress updates replace the original bubble instead of adding a
+            // new message for every uploaded file chunk.
+            _events[existingIndex] = event;
+          } else {
+            _events.insert(0, event);
+          }
           if (event.deviceId != null && event.clientName != null) {
             if (event.type == TransferEventType.clientConnected) {
               _connectedPeers[event.deviceId!] = _PeerDevice(
@@ -102,11 +120,7 @@ class _SendHereHomeState extends State<SendHereHome> {
                   name: event.clientName!,
                   online: true,
                   lastSeenAt: DateTime.now());
-              _selectedPeerId = event.deviceId;
-              if (_addDeviceDialogOpen) {
-                _addDeviceDialogOpen = false;
-                Navigator.of(context, rootNavigator: true).pop();
-              }
+              _selectedPeerId ??= event.deviceId;
             } else if (event.type == TransferEventType.clientDisconnected) {
               final device = _connectedPeers[event.deviceId!];
               if (device != null) {
@@ -123,11 +137,15 @@ class _SendHereHomeState extends State<SendHereHome> {
           }
         });
         _saveRecentDevices();
+        if (shouldClosePhoneDialog) {
+          _phoneConnectDialogOpen = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) Navigator.of(context, rootNavigator: true).pop();
+          });
+        }
       });
       await _nearby.start(port: server.port);
-      _nearbySubscription = _nearby.devices.listen((devices) {
-        if (mounted) setState(() => _nearbyDevices = devices);
-      });
+      _nearbySubscription = _nearby.devices.listen(_syncNearbyDevices);
       final addresses = await server.localAddresses();
       if (mounted) {
         setState(() {
@@ -146,9 +164,68 @@ class _SendHereHomeState extends State<SendHereHome> {
     return 'http://$_address:${_server!.port}/?token=${_server!.token}';
   }
 
-  Future<void> _connectPeer(NearbyDevice device) async {
-    if (_connectingPeer || _server == null || _nearby.deviceId == null) return;
-    setState(() => _connectingPeer = true);
+  Future<void> _syncNearbyDevices(List<NearbyDevice> devices) async {
+    if (!mounted) return;
+    final localDeviceId = _nearby.deviceId;
+    final currentIds = devices.map((device) => device.id).toSet();
+    final disappearedIds = _discoveredComputerIds.difference(currentIds);
+    setState(() {
+      for (final id in disappearedIds) {
+        final existing = _connectedPeers[id];
+        if (existing != null) {
+          _connectedPeers[id] =
+              existing.copyWith(online: false, lastSeenAt: DateTime.now());
+        }
+      }
+      _discoveredComputerIds
+        ..clear()
+        ..addAll(currentIds);
+      for (final device in devices) {
+        _server?.updatePeerEndpoint(
+          deviceId: device.id,
+          deviceName: device.name,
+          address: device.address,
+          port: device.port,
+          localDeviceId: localDeviceId ?? '',
+        );
+        final existing = _connectedPeers[device.id];
+        _connectedPeers[device.id] = _PeerDevice(
+          id: device.id,
+          name: device.name,
+          // mDNS only proves the device is nearby. A device becomes online
+          // after its peer WebSocket is ready to transfer text and files.
+          online: _server?.hasDevice(device.id) ?? false,
+          lastSeenAt: DateTime.now(),
+        );
+        if (existing == null && _selectedPeerId == null) {
+          _selectedPeerId = device.id;
+        }
+      }
+    });
+    _saveRecentDevices();
+
+    for (final id in disappearedIds) {
+      unawaited(_server?.disconnectPeer(id) ?? Future<void>.value());
+    }
+
+    // Only one side dials. The other side receives that peer's WebSocket,
+    // preventing duplicate sessions when both computers discover each other.
+    if (localDeviceId == null) return;
+    for (final device in devices) {
+      if (localDeviceId.compareTo(device.id) < 0) {
+        unawaited(_connectPeer(device));
+      }
+    }
+  }
+
+  Future<bool> _connectPeer(NearbyDevice device) async {
+    if (_server == null ||
+        _nearby.deviceId == null ||
+        _server!.hasPeer(device.id) ||
+        _connectingPeerIds.contains(device.id)) {
+      return false;
+    }
+    setState(() => _connectingPeerIds.add(device.id));
     try {
       await _server!.connectToPeer(
         deviceId: device.id,
@@ -157,14 +234,28 @@ class _SendHereHomeState extends State<SendHereHome> {
         peerPort: device.port,
         localDeviceId: _nearby.deviceId!,
       );
-      if (mounted) setState(() => _selectedPeerId = device.id);
-    } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('无法连接 ${device.name}：$error')));
+        setState(() {
+          final existing = _connectedPeers[device.id];
+          if (existing != null) {
+            _connectedPeers[device.id] =
+                existing.copyWith(online: _server!.hasDevice(device.id));
+          }
+          _selectedPeerId ??= device.id;
+        });
       }
+      return true;
+    } catch (_) {
+      // Retry while the device is still advertised. This restores recent
+      // computers after an app restart without making the user reconnect them.
+      Future<void>.delayed(const Duration(seconds: 3), () {
+        if (mounted && _discoveredComputerIds.contains(device.id)) {
+          unawaited(_connectPeer(device));
+        }
+      });
+      return false;
     } finally {
-      if (mounted) setState(() => _connectingPeer = false);
+      if (mounted) setState(() => _connectingPeerIds.remove(device.id));
     }
   }
 
@@ -178,8 +269,10 @@ class _SendHereHomeState extends State<SendHereHome> {
       return;
     }
     _server!.sendTextToDevice(peerId, text);
-    setState(() => _drafts.remove(peerId));
-    _textController.clear();
+    setState(() {
+      _drafts.remove(peerId);
+      _textController.clear();
+    });
   }
 
   Future<void> _offerFiles() async {
@@ -202,6 +295,30 @@ class _SendHereHomeState extends State<SendHereHome> {
     }
   }
 
+  Future<void> _selectPeer(String id) async {
+    final previousId = _selectedPeerId;
+    if (previousId != null) {
+      _drafts[previousId] = _textController.text;
+    }
+    if (!mounted) return;
+    setState(() {
+      _selectedPeerId = id;
+      _textController.text = _drafts[id] ?? '';
+    });
+  }
+
+  void _showPhoneConnectDialog() {
+    final url = _url;
+    if (url == null) return;
+    _phoneConnectDialogOpen = true;
+    showDialog<void>(
+      context: context,
+      builder: (_) => _AddDeviceDialog(url: url),
+    ).whenComplete(() {
+      if (mounted) _phoneConnectDialogOpen = false;
+    });
+  }
+
   @override
   void dispose() {
     _subscription?.cancel();
@@ -216,7 +333,13 @@ class _SendHereHomeState extends State<SendHereHome> {
   Widget build(BuildContext context) {
     final url = _url;
     return Scaffold(
-      appBar: AppBar(title: const Text('SendHere · 传到这')),
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        toolbarHeight: 12,
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: _error != null
@@ -228,15 +351,10 @@ class _SendHereHomeState extends State<SendHereHome> {
                       width: 300,
                       child: _DeviceSidebar(
                         url: url,
-                        nearbyDevices: _nearbyDevices,
                         connectedPeers: _connectedPeers.values.toList(),
                         selectedPeerId: _selectedPeerId,
-                        connecting: _connectingPeer,
-                        connect: _connectPeer,
-                        selectPeer: (id) => setState(() {
-                          _selectedPeerId = id;
-                          _textController.text = _drafts[id] ?? '';
-                        }),
+                        selectPeer: _selectPeer,
+                        connectPhone: _showPhoneConnectDialog,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -305,21 +423,17 @@ class _PeerDevice {
 class _DeviceSidebar extends StatelessWidget {
   const _DeviceSidebar({
     required this.url,
-    required this.nearbyDevices,
     required this.connectedPeers,
     required this.selectedPeerId,
-    required this.connecting,
-    required this.connect,
     required this.selectPeer,
+    required this.connectPhone,
   });
 
   final String url;
-  final List<NearbyDevice> nearbyDevices;
   final List<_PeerDevice> connectedPeers;
   final String? selectedPeerId;
-  final bool connecting;
-  final Future<void> Function(NearbyDevice device) connect;
   final ValueChanged<String> selectPeer;
+  final VoidCallback connectPhone;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -329,14 +443,14 @@ class _DeviceSidebar extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 18, 16, 10),
             child: Text('设备列表',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
           ),
           Expanded(
             child: connectedPeers.isEmpty
                 ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(24),
-                      child: Text('暂无最近设备\n点击下方按钮添加设备',
+                      child: Text('暂无设备\n附近电脑会自动显示在这里',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.black54)),
                     ),
@@ -358,23 +472,9 @@ class _DeviceSidebar extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.all(12),
             child: FilledButton.icon(
-              onPressed: () {
-                final state =
-                    context.findAncestorStateOfType<_SendHereHomeState>();
-                state?._addDeviceDialogOpen = true;
-                showDialog<void>(
-                  context: context,
-                  builder: (_) => _AddDeviceDialog(
-                    url: url,
-                    nearbyDevices: nearbyDevices,
-                    connectedIds: connectedPeers.map((peer) => peer.id).toSet(),
-                    connecting: connecting,
-                    connect: connect,
-                  ),
-                ).whenComplete(() => state?._addDeviceDialogOpen = false);
-              },
+              onPressed: connectPhone,
               icon: const Icon(Icons.add),
-              label: const Text('添加 / 连接设备'),
+              label: const Text('连接手机'),
             ),
           ),
         ]),
@@ -404,9 +504,14 @@ class _DeviceTile extends StatelessWidget {
               : Theme.of(context).colorScheme.surfaceContainerHighest,
           child: Icon(
               phone ? Icons.phone_iphone_outlined : Icons.computer_outlined)),
-      title: Text(device.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      minVerticalPadding: 7,
+      title: Text(device.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
       subtitle: Text(
-          device.online ? '在线' : _lastSeenLabel(context, device.lastSeenAt)),
+          device.online ? '在线' : _lastSeenLabel(context, device.lastSeenAt),
+          style: const TextStyle(fontSize: 12)),
       trailing: device.online
           ? const Icon(Icons.circle, size: 10, color: Colors.green)
           : const Icon(Icons.cloud_off_outlined),
@@ -429,74 +534,32 @@ class _DeviceTile extends StatelessWidget {
 }
 
 class _AddDeviceDialog extends StatelessWidget {
-  const _AddDeviceDialog({
-    required this.url,
-    required this.nearbyDevices,
-    required this.connectedIds,
-    required this.connecting,
-    required this.connect,
-  });
+  const _AddDeviceDialog({required this.url});
 
   final String url;
-  final List<NearbyDevice> nearbyDevices;
-  final Set<String> connectedIds;
-  final bool connecting;
-  final Future<void> Function(NearbyDevice device) connect;
 
   @override
-  Widget build(BuildContext context) {
-    final available =
-        nearbyDevices.where((d) => !connectedIds.contains(d.id)).toList();
-    return AlertDialog(
-      title: const Text('添加 / 连接设备'),
-      content: SizedBox(
-        width: 440,
-        child: SingleChildScrollView(
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('附近可连接电脑',
-                style: TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            if (available.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('正在搜索同一局域网内的 SendHere 电脑…'),
-              )
-            else
-              ...available.map((device) => ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.computer_outlined),
-                    title: Text(device.name),
-                    subtitle: Text('${device.address}:${device.port}'),
-                    trailing: OutlinedButton(
-                      onPressed: connecting
-                          ? null
-                          : () async {
-                              await connect(device);
-                              if (context.mounted) Navigator.of(context).pop();
-                            },
-                      child: Text(connecting ? '连接中…' : '连接'),
-                    ),
-                  )),
-            const Divider(height: 30),
-            const Text('连接手机', style: TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('连接手机'),
+        content: SizedBox(
+          width: 440,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('附近运行 SendHere 的电脑会自动出现在设备列表中。'),
+            const SizedBox(height: 18),
             const Text('使用手机浏览器或微信扫描二维码，无需安装手机 App。'),
             const SizedBox(height: 12),
-            Center(child: QrImageView(data: url, size: 190)),
+            QrImageView(data: url, size: 190),
             const SizedBox(height: 10),
             SelectableText(url,
                 style: Theme.of(context).textTheme.bodySmall,
                 textAlign: TextAlign.center),
           ]),
         ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context), child: const Text('关闭'))
-      ],
-    );
-  }
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context), child: const Text('关闭'))
+        ],
+      );
 }
 
 class _ConversationPanel extends StatefulWidget {
@@ -555,9 +618,14 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   }
 
   void _submit(String value) {
+    developer.log('Submitting ${value.length} characters',
+        name: 'SendHere.Input');
     widget.controller.text = value;
     widget.sendText();
     if (widget.controller.text.isEmpty) {
+      widget.onDraftChanged('');
+      // AppKit platform views can retain their drawing after Flutter clears the
+      // draft. Clear the currently mounted NSTextView directly as well.
       _nativeFieldKey.currentState?.clear();
     }
   }
@@ -573,7 +641,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
             SizedBox(height: 14),
             Text('选择一台已连接设备开始对话'),
             SizedBox(height: 6),
-            Text('可通过左下角“添加 / 连接设备”发现附近电脑或连接手机',
+            Text('附近电脑会自动出现；可通过左下角二维码连接手机',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.black54)),
           ]),
@@ -633,7 +701,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
             ),
             const Spacer(),
             FilledButton.icon(
-                onPressed: widget.online ? () => _submit(widget.draft) : null,
+                onPressed: widget.online
+                    ? () => _submit(widget.controller.text)
+                    : null,
                 icon: const Icon(Icons.send),
                 label: const Text('发送')),
           ]),
@@ -673,36 +743,56 @@ class _MessageBubble extends StatelessWidget {
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: file
-                    ? InkWell(
-                        onTap: event.localPath == null
-                            ? null
-                            : () =>
-                                Process.run('open', ['-R', event.localPath!]),
-                        child: image && event.localPath != null
-                            ? ConstrainedBox(
-                                constraints:
-                                    const BoxConstraints(maxWidth: 360),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Image.file(File(event.localPath!),
-                                      height: 180,
-                                      fit: BoxFit.fitHeight,
-                                      errorBuilder: (_, __, ___) =>
-                                          _FileLabel(name: event.fileName)),
-                                ),
-                              )
-                            : _FileLabel(name: event.fileName),
-                      )
+                    ? Column(mainAxisSize: MainAxisSize.min, children: [
+                        InkWell(
+                          onTap: event.localPath == null
+                              ? null
+                              : () =>
+                                  Process.run('open', ['-R', event.localPath!]),
+                          child: image && event.localPath != null
+                              ? ConstrainedBox(
+                                  constraints:
+                                      const BoxConstraints(maxWidth: 360),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.file(File(event.localPath!),
+                                        height: 180,
+                                        fit: BoxFit.fitHeight,
+                                        errorBuilder: (_, __, ___) =>
+                                            _FileLabel(name: event.fileName)),
+                                  ),
+                                )
+                              : _FileLabel(name: event.fileName),
+                        ),
+                        if (sent &&
+                            event.transferId != null &&
+                            event.fileStatus !=
+                                FileTransferStatus.completed) ...[
+                          const SizedBox(height: 10),
+                          _TransferProgress(event: event),
+                        ],
+                      ])
                     : SelectableText(event.text ?? ''),
               ),
               const SizedBox(height: 3),
-              Text('${sent ? '已发送' : '已接收'} · $time',
+              Text(_messageStatus(sent, event, time),
                   style: Theme.of(context).textTheme.bodySmall),
             ],
           ),
         ),
       ),
     );
+  }
+
+  String _messageStatus(bool sent, TransferEvent event, String time) {
+    if (sent && event.type == TransferEventType.file) {
+      return switch (event.fileStatus) {
+        FileTransferStatus.uploading => '正在发送 · $time',
+        FileTransferStatus.completed => '已发送 · $time',
+        FileTransferStatus.failed => '发送失败 · $time',
+      };
+    }
+    return '${sent ? '已发送' : '已接收'} · $time';
   }
 
   bool _isImage(String? fileName) {
@@ -717,6 +807,55 @@ class _MessageBubble extends StatelessWidget {
     };
     final name = fileName?.toLowerCase() ?? '';
     return extensions.any(name.endsWith);
+  }
+}
+
+class _TransferProgress extends StatelessWidget {
+  const _TransferProgress({required this.event});
+  final TransferEvent event;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = event.fileSize ?? 0;
+    final sent = event.bytesTransferred ?? 0;
+    final progress = total == 0 ? 0.0 : (sent / total).clamp(0.0, 1.0);
+    final failed = event.fileStatus == FileTransferStatus.failed;
+    final completed = event.fileStatus == FileTransferStatus.completed;
+    final color = failed
+        ? Theme.of(context).colorScheme.error
+        : Theme.of(context).colorScheme.primary;
+    final label = failed
+        ? '发送失败${event.errorMessage == null ? '' : '：${event.errorMessage}'}'
+        : completed
+            ? '已发送 · ${_formatBytes(total)}'
+            : '发送中 ${(progress * 100).round()}% · ${_formatBytes(sent)} / ${_formatBytes(total)}';
+    return SizedBox(
+      width: 280,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        LinearProgressIndicator(
+          value: completed || failed ? 1 : progress,
+          minHeight: 5,
+          borderRadius: BorderRadius.circular(4),
+          color: color,
+          backgroundColor:
+              Theme.of(context).colorScheme.surfaceContainerHighest,
+        ),
+        const SizedBox(height: 5),
+        Text(label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style:
+                Theme.of(context).textTheme.bodySmall?.copyWith(color: color)),
+      ]),
+    );
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 }
 

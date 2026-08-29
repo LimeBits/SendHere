@@ -90,25 +90,42 @@ document.querySelector('#send-text').onclick = async () => {
   }
 };
 
-document.querySelector('#files').onchange = async event => {
-  const files = [...event.target.files];
-  if (!files.length) return;
-  status.textContent = '正在上传…';
-  const data = new FormData();
-  files.forEach(file => data.append('files', file));
+async function uploadFile(file) {
+  // Upload one File as the request body rather than as multipart/form-data.
+  // WeChat's iOS WebView can leave a multipart upload pending on an HTTP LAN
+  // origin, while direct File requests include a determinate content length.
   const response = await request('/api/upload?token=' + encodeURIComponent(token), {
     method: 'POST',
     headers: {
       ...headers,
-      'x-sendhere-client-name': clientName,
+      'content-type': file.type || 'application/octet-stream',
+      'x-sendhere-client-name': encodeURIComponent(clientName),
       'x-sendhere-device-id': browserId,
+      'x-sendhere-file-name': encodeURIComponent(file.name),
     },
-    body: data,
+    body: file,
   });
-  if (response.status !== 403) {
-    status.textContent = response.ok ? '上传完成' : '上传失败，请重新扫码后重试。';
+  if (!response.ok && response.status !== 403) {
+    throw new Error(`Upload failed (${response.status})`);
   }
-  event.target.value = '';
+}
+
+document.querySelector('#files').onchange = async event => {
+  const files = [...event.target.files];
+  if (!files.length) return;
+  try {
+    for (let index = 0; index < files.length; index++) {
+      status.textContent = files.length === 1
+          ? `正在上传 ${files[index].name}…`
+          : `正在上传 ${index + 1}/${files.length}：${files[index].name}`;
+      await uploadFile(files[index]);
+    }
+    status.textContent = '上传完成';
+  } catch (_) {
+    status.textContent = '上传失败，请重新扫码后重试。';
+  } finally {
+    event.target.value = '';
+  }
 };
 
 request('/api/status?token=' + encodeURIComponent(token))

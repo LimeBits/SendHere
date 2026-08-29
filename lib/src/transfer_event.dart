@@ -2,6 +2,8 @@ enum TransferEventType { text, file, clientConnected, clientDisconnected }
 
 enum TransferDirection { received, sent }
 
+enum FileTransferStatus { uploading, completed, failed }
+
 class TransferEvent {
   const TransferEvent({
     required this.type,
@@ -14,6 +16,11 @@ class TransferEvent {
     this.fileSize,
     this.downloadPath,
     this.localPath,
+    this.transferId,
+    this.fileStatus = FileTransferStatus.completed,
+    this.bytesTransferred,
+    this.errorMessage,
+    this.isComputerPeer = false,
   });
 
   final TransferEventType type;
@@ -26,4 +33,9 @@ class TransferEvent {
   final int? fileSize;
   final String? downloadPath;
   final String? localPath;
+  final String? transferId;
+  final FileTransferStatus fileStatus;
+  final int? bytesTransferred;
+  final String? errorMessage;
+  final bool isComputerPeer;
 }

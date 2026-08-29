@@ -84,7 +84,10 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
       guard let self else { return }
       switch call.method {
       case "setText":
-        self.textView.string = call.arguments as? String ?? ""
+        let text = call.arguments as? String ?? ""
+        NSLog("[SendHere.Input] Native setText: %d characters", text.count)
+        self.textView.string = text
+        self.textView.needsDisplay = true
         result(nil)
       case "getText":
         result(self.textView.string)
@@ -102,6 +105,7 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
   }
 
   func textDidChange(_ notification: Notification) {
+    NSLog("[SendHere.Input] Native text changed: %d characters", textView.string.count)
     channel.invokeMethod("textChanged", arguments: textView.string)
   }
 

@@ -17,10 +17,13 @@ import 'transfer_event.dart';
 class LocalTransferServer {
   LocalTransferServer({
     required this.downloadDirectory,
+    String? deviceName,
     Future<List<int>> Function(String asset)? loadAsset,
-  }) : _loadAsset = loadAsset ?? _loadFlutterAsset;
+  })  : deviceName = deviceName ?? Platform.localHostname,
+        _loadAsset = loadAsset ?? _loadFlutterAsset;
 
   final Directory downloadDirectory;
+  final String deviceName;
   final Future<List<int>> Function(String asset) _loadAsset;
   final _events = StreamController<TransferEvent>.broadcast();
   final _sockets = <WebSocketChannel>{};
@@ -30,6 +33,7 @@ class LocalTransferServer {
   final _peerTokens = <String, DateTime>{};
   final _peerSockets = <String, WebSocketChannel>{};
   final _peerSessions = <String, _PeerSession>{};
+  final _peerEndpoints = <String, _PeerEndpoint>{};
 
   HttpServer? _server;
   String _token = _newToken();
@@ -161,7 +165,7 @@ class LocalTransferServer {
     if (!_isAuthorized(request)) return _forbidden();
     return Response.ok(
       jsonEncode({
-        'deviceName': Platform.localHostname,
+        'deviceName': deviceName,
         'expiresAt': _expiresAt.toIso8601String()
       }),
       headers: {'content-type': 'application/json; charset=utf-8'},
@@ -172,8 +176,7 @@ class LocalTransferServer {
     _peerTokens.removeWhere((_, expiry) => DateTime.now().isAfter(expiry));
     final token = _newToken();
     _peerTokens[token] = DateTime.now().add(const Duration(minutes: 5));
-    return Response.ok(
-        jsonEncode({'token': token, 'name': Platform.localHostname}),
+    return Response.ok(jsonEncode({'token': token, 'name': deviceName}),
         headers: {'content-type': 'application/json; charset=utf-8'});
   }
 
@@ -199,38 +202,66 @@ class LocalTransferServer {
 
   Future<Response> _handleUpload(Request request) async {
     if (!_isAuthorized(request)) return _forbidden();
-    final boundary = _boundaryFrom(request.headers['content-type']);
-    if (boundary == null) {
-      return Response(400, body: 'Expected multipart/form-data.');
-    }
-    final clientName = request.headers['x-sendhere-client-name'] ?? '手机';
+    final encodedClientName = request.headers['x-sendhere-client-name'];
+    final clientName = encodedClientName == null
+        ? '手机'
+        : Uri.decodeComponent(encodedClientName);
     final deviceId = request.headers['x-sendhere-device-id'];
-    final transformer = MimeMultipartTransformer(boundary);
-    await for (final part in transformer.bind(request.read())) {
-      final disposition =
-          HeaderValue.parse(part.headers['content-disposition'] ?? '');
-      final filename = disposition.parameters['filename'];
-      if (filename == null || filename.isEmpty) continue;
-      final safeName = path.basename(filename);
-      final destination = await _uniqueFile(safeName);
-      await part.pipe(destination.openWrite());
-      final size = await destination.length();
-      _events.add(TransferEvent(
-          type: TransferEventType.file,
-          createdAt: DateTime.now(),
-          fileName: destination.path.split(Platform.pathSeparator).last,
-          fileSize: size,
-          clientName: clientName,
-          deviceId: deviceId,
-          localPath: destination.path));
-      _broadcast({
-        'type': 'file_received',
-        'fileName': destination.path.split(Platform.pathSeparator).last,
-        'fileSize': size
-      });
+    final boundary = _boundaryFrom(request.headers['content-type']);
+
+    if (boundary != null) {
+      // Keep multipart support for desktop peer uploads and older web clients.
+      final transformer = MimeMultipartTransformer(boundary);
+      await for (final part in transformer.bind(request.read())) {
+        final disposition =
+            HeaderValue.parse(part.headers['content-disposition'] ?? '');
+        final filename = disposition.parameters['filename'];
+        if (filename == null || filename.isEmpty) continue;
+        await _saveUploadedFile(part, filename,
+            clientName: clientName, deviceId: deviceId);
+      }
+    } else {
+      // WeChat's iOS WebView can leave multipart HTTP uploads pending. It sends
+      // each selected File as a direct request body with its name in a header.
+      final encodedFilename = request.headers['x-sendhere-file-name'];
+      if (encodedFilename == null || encodedFilename.isEmpty) {
+        return Response(400, body: 'Expected a file name.');
+      }
+      final filename = Uri.decodeComponent(encodedFilename);
+      await _saveUploadedFile(request.read(), filename,
+          clientName: clientName, deviceId: deviceId);
     }
     return Response.ok(jsonEncode({'ok': true}),
         headers: {'content-type': 'application/json'});
+  }
+
+  Future<void> _saveUploadedFile(Stream<List<int>> content, String filename,
+      {required String clientName, String? deviceId}) async {
+    final safeName = path.basename(filename);
+    if (safeName.isEmpty || safeName == '.') return;
+    final destination = await _uniqueFile(safeName);
+    final sink = destination.openWrite();
+    try {
+      await for (final chunk in content) {
+        sink.add(chunk);
+      }
+    } finally {
+      await sink.close();
+    }
+    final size = await destination.length();
+    _events.add(TransferEvent(
+        type: TransferEventType.file,
+        createdAt: DateTime.now(),
+        fileName: path.basename(destination.path),
+        fileSize: size,
+        clientName: clientName,
+        deviceId: deviceId,
+        localPath: destination.path));
+    _broadcast({
+      'type': 'file_received',
+      'fileName': path.basename(destination.path),
+      'fileSize': size,
+    });
   }
 
   Future<Response> _handleDownload(Request request, String id) async {
@@ -282,11 +313,12 @@ class LocalTransferServer {
           deviceName: deviceName,
           senderDeviceId: localDeviceId,
           baseUri: Uri(scheme: 'http', host: address, port: peerPort),
-          token: token);
+          token: token,
+          expiresAt: DateTime.now().add(const Duration(minutes: 4)));
       _registerSocket(socket, name: deviceName, id: deviceId, isPeer: true);
       socket.sink.add(jsonEncode({
         'type': 'identify',
-        'name': Platform.localHostname,
+        'name': this.deviceName,
         'id': localDeviceId,
         'peer': true,
       }));
@@ -297,6 +329,68 @@ class LocalTransferServer {
 
   bool hasPeer(String deviceId) => _peerSockets.containsKey(deviceId);
   bool hasDevice(String deviceId) => _clientIds.values.contains(deviceId);
+
+  /// Removes a desktop that has disappeared from LAN discovery immediately,
+  /// rather than waiting for the operating system's TCP timeout.
+  Future<void> disconnectPeer(String deviceId) async {
+    final socket = _peerSockets[deviceId];
+    if (socket != null) {
+      await socket.sink
+          .close(WebSocketStatus.goingAway, 'Peer is no longer discoverable');
+    }
+  }
+
+  void updatePeerEndpoint({
+    required String deviceId,
+    required String deviceName,
+    required String address,
+    required int port,
+    required String localDeviceId,
+  }) {
+    _peerEndpoints[deviceId] = _PeerEndpoint(
+      deviceId: deviceId,
+      deviceName: deviceName,
+      address: address,
+      port: port,
+      localDeviceId: localDeviceId,
+    );
+  }
+
+  Future<_PeerSession?> _ensurePeerUploadSession(String deviceId) async {
+    final existing = _peerSessions[deviceId];
+    if (existing != null && DateTime.now().isBefore(existing.expiresAt)) {
+      return existing;
+    }
+    _peerSessions.remove(deviceId);
+    final endpoint = _peerEndpoints[deviceId];
+    if (endpoint == null) return null;
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(Uri(
+        scheme: 'http',
+        host: endpoint.address,
+        port: endpoint.port,
+        path: '/api/peer-session',
+      ));
+      final response = await request.close();
+      if (response.statusCode != HttpStatus.ok) return null;
+      final body =
+          jsonDecode(await utf8.decodeStream(response)) as Map<String, dynamic>;
+      final session = _PeerSession(
+        deviceId: deviceId,
+        deviceName: endpoint.deviceName,
+        senderDeviceId: endpoint.localDeviceId,
+        baseUri:
+            Uri(scheme: 'http', host: endpoint.address, port: endpoint.port),
+        token: body['token'] as String,
+        expiresAt: DateTime.now().add(const Duration(minutes: 4)),
+      );
+      _peerSessions[deviceId] = session;
+      return session;
+    } finally {
+      client.close(force: true);
+    }
+  }
 
   void sendTextToDevice(String deviceId, String text) {
     if (text.trim().isEmpty) return;
@@ -357,49 +451,111 @@ class LocalTransferServer {
   }
 
   Future<void> sendFileToPeer(String deviceId, File file) async {
-    final session = _peerSessions[deviceId];
-    if (session == null || !hasPeer(deviceId)) {
-      throw StateError('设备未连接');
-    }
-    final boundary = 'sendhere-${_newToken()}';
+    if (!hasPeer(deviceId)) throw StateError('设备未连接');
+    final session = await _ensurePeerUploadSession(deviceId);
+    if (session == null) throw StateError('无法获取设备的文件传输会话');
     final filename = path.basename(file.path);
-    final prefix = utf8.encode('--$boundary\r\n'
-        'Content-Disposition: form-data; name="file"; filename="$filename"\r\n'
-        'Content-Type: ${lookupMimeType(filename) ?? 'application/octet-stream'}\r\n\r\n');
-    const suffix = '\r\n--';
-    final ending = utf8.encode('$suffix$boundary--\r\n');
+    final size = await file.length();
+    final transferId = _newToken();
+    _emitFileTransfer(
+      transferId: transferId,
+      deviceId: deviceId,
+      deviceName: session.deviceName,
+      file: file,
+      fileName: filename,
+      fileSize: size,
+      status: FileTransferStatus.uploading,
+      bytesTransferred: 0,
+    );
     final client = HttpClient();
     try {
+      // Share the direct binary upload protocol used by mobile web views.
+      // Unlike manually assembled multipart requests, it does not mix request
+      // writes with addStream and therefore cannot enter HttpClient's Bad state.
       final request =
           await client.postUrl(session.baseUri.replace(path: '/api/upload'));
       request.headers
         ..set(HttpHeaders.contentTypeHeader,
-            'multipart/form-data; boundary=$boundary')
+            lookupMimeType(filename) ?? 'application/octet-stream')
         ..set('x-sendhere-token', session.token)
-        ..set('x-sendhere-client-name', Platform.localHostname)
-        ..set('x-sendhere-device-id', session.senderDeviceId);
-      request.contentLength =
-          prefix.length + await file.length() + ending.length;
-      request.add(prefix);
-      await request.addStream(file.openRead());
-      request.add(ending);
+        ..set('x-sendhere-client-name', Uri.encodeComponent(deviceName))
+        ..set('x-sendhere-device-id', session.senderDeviceId)
+        ..set('x-sendhere-file-name', Uri.encodeComponent(filename));
+      request.contentLength = size;
+      var bytesTransferred = 0;
+      await request.addStream(file.openRead().transform(
+        StreamTransformer.fromHandlers(handleData: (chunk, sink) {
+          bytesTransferred += chunk.length;
+          _emitFileTransfer(
+            transferId: transferId,
+            deviceId: deviceId,
+            deviceName: session.deviceName,
+            file: file,
+            fileName: filename,
+            fileSize: size,
+            status: FileTransferStatus.uploading,
+            bytesTransferred: bytesTransferred,
+          );
+          sink.add(chunk);
+        }),
+      ));
       final response = await request.close();
       if (response.statusCode != HttpStatus.ok) {
         throw HttpException('设备拒绝了文件传输（${response.statusCode}）');
       }
       await response.drain();
-      _events.add(TransferEvent(
-          type: TransferEventType.file,
-          direction: TransferDirection.sent,
-          createdAt: DateTime.now(),
-          fileName: filename,
-          fileSize: await file.length(),
-          clientName: session.deviceName,
-          deviceId: deviceId,
-          localPath: file.path));
+      _emitFileTransfer(
+        transferId: transferId,
+        deviceId: deviceId,
+        deviceName: session.deviceName,
+        file: file,
+        fileName: filename,
+        fileSize: size,
+        status: FileTransferStatus.completed,
+        bytesTransferred: size,
+      );
+    } catch (error) {
+      _emitFileTransfer(
+        transferId: transferId,
+        deviceId: deviceId,
+        deviceName: session.deviceName,
+        file: file,
+        fileName: filename,
+        fileSize: size,
+        status: FileTransferStatus.failed,
+        errorMessage: '$error',
+      );
+      rethrow;
     } finally {
       client.close(force: true);
     }
+  }
+
+  void _emitFileTransfer({
+    required String transferId,
+    required String deviceId,
+    required String deviceName,
+    required File file,
+    required String fileName,
+    required int fileSize,
+    required FileTransferStatus status,
+    int? bytesTransferred,
+    String? errorMessage,
+  }) {
+    _events.add(TransferEvent(
+      type: TransferEventType.file,
+      direction: TransferDirection.sent,
+      createdAt: DateTime.now(),
+      clientName: deviceName,
+      deviceId: deviceId,
+      fileName: fileName,
+      fileSize: fileSize,
+      localPath: file.path,
+      transferId: transferId,
+      fileStatus: status,
+      bytesTransferred: bytesTransferred,
+      errorMessage: errorMessage,
+    ));
   }
 
   void sendTextToPhone(String text) {
@@ -445,7 +601,8 @@ class LocalTransferServer {
           type: TransferEventType.clientConnected,
           createdAt: DateTime.now(),
           clientName: name,
-          deviceId: id));
+          deviceId: id,
+          isComputerPeer: true));
     }
     socket.stream.listen((message) {
       try {
@@ -475,7 +632,8 @@ class LocalTransferServer {
                 type: TransferEventType.clientConnected,
                 createdAt: DateTime.now(),
                 clientName: identifiedName,
-                deviceId: identifiedId));
+                deviceId: identifiedId,
+                isComputerPeer: peer));
           }
         } else if (data['type'] == 'peer_text' && _clientIds[socket] != null) {
           _events.add(TransferEvent(
@@ -550,6 +708,22 @@ class LocalTransferServer {
       .replaceAll('=', '');
 }
 
+class _PeerEndpoint {
+  const _PeerEndpoint({
+    required this.deviceId,
+    required this.deviceName,
+    required this.address,
+    required this.port,
+    required this.localDeviceId,
+  });
+
+  final String deviceId;
+  final String deviceName;
+  final String address;
+  final int port;
+  final String localDeviceId;
+}
+
 class _PeerSession {
   const _PeerSession({
     required this.deviceId,
@@ -557,6 +731,7 @@ class _PeerSession {
     required this.senderDeviceId,
     required this.baseUri,
     required this.token,
+    required this.expiresAt,
   });
 
   final String deviceId;
@@ -564,4 +739,5 @@ class _PeerSession {
   final String senderDeviceId;
   final Uri baseUri;
   final String token;
+  final DateTime expiresAt;
 }

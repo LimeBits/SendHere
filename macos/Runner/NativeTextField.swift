@@ -196,7 +196,7 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
         // here used to make each round-trip through Flutter grow another line.
         content.append(NSAttributedString(
           string: text,
-          attributes: [.font: NSFont.systemFont(ofSize: 16), .paragraphStyle: paragraph]))
+          attributes: [.font: NSFont.systemFont(ofSize: 13), .paragraphStyle: paragraph]))
       } else if item["type"] == "file", let filePath = item["path"] {
         // Attachments occupy their own visual line without making that newline
         // part of the user's text model.
@@ -214,7 +214,7 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
     if !draft.isEmpty {
       content.append(NSAttributedString(
         string: draft,
-        attributes: [.font: NSFont.systemFont(ofSize: 16), .foregroundColor: NSColor.textColor]))
+        attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.textColor]))
     }
     textView.textStorage?.setAttributedString(content)
     textView.setSelectedRange(NSRange(location: content.length, length: 0))
@@ -243,7 +243,7 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
       calibratedRed: 0.89, green: 0.90, blue: 0.97, alpha: 1)
     background.setFill()
     NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 8, yRadius: 8).fill()
-    let titleRect = NSRect(x: 14, y: 26, width: 250, height: 22)
+    let titleRect = NSRect(x: 14, y: 39, width: 250, height: 20)
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingMiddle
     paragraph.maximumLineHeight = 22
@@ -258,11 +258,24 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
     NSAttributedString(string: name, attributes: attributes).draw(
       with: titleRect,
       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    let sizeRect = NSRect(x: 14, y: 18, width: 250, height: 16)
+    let sizeAttributes: [NSAttributedString.Key: Any] = [
+      .font: NSFont.systemFont(ofSize: 12),
+      .foregroundColor: NSColor(calibratedWhite: 0.38, alpha: 1)]
+    NSAttributedString(string: fileSizeDescription(for: path), attributes: sizeAttributes).draw(in: sizeRect)
     let icon = NSWorkspace.shared.icon(forFile: path)
     icon.size = NSSize(width: 38, height: 38)
     icon.draw(in: NSRect(x: 278, y: 18, width: 38, height: 38))
     image.unlockFocus()
     return image
+  }
+
+  private func fileSizeDescription(for path: String) -> String {
+    guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+          let byteCount = attributes[.size] as? NSNumber else {
+      return "文件"
+    }
+    return ByteCountFormatter.string(fromByteCount: byteCount.int64Value, countStyle: .file)
   }
 
   func textDidChange(_ notification: Notification) {

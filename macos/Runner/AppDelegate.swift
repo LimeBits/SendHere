@@ -122,7 +122,9 @@ class AppDelegate: FlutterAppDelegate {
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    return false
+    // SendHere is a regular windowed app: closing its last window ends the
+    // process, so its Dock and menu-bar items disappear with it.
+    return true
   }
 
   override func applicationShouldHandleReopen(

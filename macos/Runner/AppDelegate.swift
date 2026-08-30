@@ -58,6 +58,8 @@ final class StatusBarController: NSObject {
   }
 
   @objc func showMainWindow() {
+    // A menu-bar launch restores the regular app policy, which makes the
+    // reopened window behave like a normal foreground application again.
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
     let window = mainWindow ?? NSApp.windows.first
@@ -119,12 +121,25 @@ class AppDelegate: FlutterAppDelegate {
   override func applicationDidFinishLaunching(_ notification: Notification) {
     super.applicationDidFinishLaunching(notification)
     StatusBarController.shared.install()
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(mainWindowWillClose(_:)),
+      name: NSWindow.willCloseNotification,
+      object: nil)
+  }
+
+  @objc private func mainWindowWillClose(_ notification: Notification) {
+    guard let window = notification.object as? NSWindow,
+          window === StatusBarController.shared.mainWindow else { return }
+    // Keep transfers and the menu-bar control alive, but remove SendHere from
+    // the Dock after its main window closes, matching VoxHere's behavior.
+    DispatchQueue.main.async {
+      NSApp.setActivationPolicy(.accessory)
+    }
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    // SendHere is a regular windowed app: closing its last window ends the
-    // process, so its Dock and menu-bar items disappear with it.
-    return true
+    return false
   }
 
   override func applicationShouldHandleReopen(

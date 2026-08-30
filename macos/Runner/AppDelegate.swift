@@ -121,24 +121,13 @@ class AppDelegate: FlutterAppDelegate {
   override func applicationDidFinishLaunching(_ notification: Notification) {
     super.applicationDidFinishLaunching(notification)
     StatusBarController.shared.install()
-    NotificationCenter.default.addObserver(
-      self,
-      selector: #selector(mainWindowWillClose(_:)),
-      name: NSWindow.willCloseNotification,
-      object: nil)
-  }
-
-  @objc private func mainWindowWillClose(_ notification: Notification) {
-    guard let window = notification.object as? NSWindow,
-          window === StatusBarController.shared.mainWindow else { return }
-    // Keep transfers and the menu-bar control alive, but remove SendHere from
-    // the Dock after its main window closes, matching VoxHere's behavior.
-    DispatchQueue.main.async {
-      NSApp.setActivationPolicy(.accessory)
-    }
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    // This callback is invoked only after the final app window genuinely
+    // closed. Retain the process for transfers and the menu-bar item, then
+    // switch to accessory mode so macOS removes SendHere from the Dock.
+    NSApp.setActivationPolicy(.accessory)
     return false
   }
 

@@ -1,9 +1,9 @@
 import Cocoa
 import FlutterMacOS
 
-/// Native drag destination around Flutter's root view. A Finder drag targets
-/// the content view hierarchy rather than NSWindow, so hosting the Flutter
-/// view inside this container lets the whole conversation pane accept files.
+/// Native drag destination around Flutter's root view. Finder file drops are
+/// resolved in the content-view hierarchy, so this parent view receives drops
+/// across the conversation area while Flutter retains normal input handling.
 private final class ConversationDropView: NSView {
   var onFilesDropped: (([String]) -> Void)?
 
@@ -15,13 +15,6 @@ private final class ConversationDropView: NSView {
   required init?(coder: NSCoder) {
     super.init(coder: coder)
     registerForDraggedTypes([.fileURL, .URL])
-  }
-
-  override func hitTest(_ point: NSPoint) -> NSView? {
-    // Keep normal mouse/keyboard interaction entirely with Flutter. Dragging
-    // destinations are still resolved through this registered parent view.
-    subviews.reversed().first(where: { $0.frame.contains(point) })?.hitTest(
-      convert(point, to: subviews.last)) ?? super.hitTest(point)
   }
 
   override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -51,27 +44,49 @@ private final class ConversationDropView: NSView {
   }
 }
 
+private final class ConversationContainerController: NSViewController {
+  let flutterViewController: FlutterViewController
+  let dropView = ConversationDropView()
+
+  init(flutterViewController: FlutterViewController) {
+    self.flutterViewController = flutterViewController
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func loadView() {
+    view = dropView
+  }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    addChild(flutterViewController)
+    let flutterView = flutterViewController.view
+    flutterView.frame = dropView.bounds
+    flutterView.autoresizingMask = [.width, .height]
+    dropView.addSubview(flutterView)
+  }
+}
+
 class MainFlutterWindow: NSWindow {
   private var conversationDropChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
+    let containerController = ConversationContainerController(
+      flutterViewController: flutterViewController)
     let windowFrame = self.frame
-    let dropView = ConversationDropView(frame: windowFrame)
-    dropView.autoresizingMask = [.width, .height]
-    flutterViewController.view.frame = dropView.bounds
-    flutterViewController.view.autoresizingMask = [.width, .height]
-    dropView.addSubview(flutterViewController.view)
-
-    self.contentViewController = flutterViewController
-    self.contentView = dropView
+    self.contentViewController = containerController
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     conversationDropChannel = FlutterMethodChannel(
       name: "sendhere/conversation_drop", binaryMessenger: flutterViewController.engine.binaryMessenger)
-    dropView.onFilesDropped = { [weak self] paths in
+    containerController.dropView.onFilesDropped = { [weak self] paths in
       self?.conversationDropChannel?.invokeMethod("filesDropped", arguments: paths)
     }
 

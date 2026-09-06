@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -57,10 +58,20 @@ class _SendHereHomeState extends State<SendHereHome> {
   bool _phoneQrExpanded = false;
 
   static const _recentDevicesKey = 'sendhere-recent-devices';
+  static const _conversationDropChannel =
+      MethodChannel('sendhere/conversation_drop');
 
   @override
   void initState() {
     super.initState();
+    _conversationDropChannel.setMethodCallHandler((call) async {
+      if (call.method == 'filesDropped') {
+        final paths = (call.arguments as List<dynamic>? ?? const [])
+            .whereType<String>()
+            .toList();
+        await _addFilesToPending(paths);
+      }
+    });
     _loadInitialState().whenComplete(_startServer);
   }
 
@@ -487,6 +498,24 @@ class _SendHereHomeState extends State<SendHereHome> {
     });
   }
 
+  Future<void> _cancelOutboxItem(String transferId) async {
+    OutboxItem? item;
+    for (final candidate in _outbox.items) {
+      if (candidate.id == transferId) {
+        item = candidate;
+        break;
+      }
+    }
+    if (item == null || item.status == FileTransferStatus.uploading) return;
+    await _outbox.remove(transferId);
+    if (item.isFile && item.filePath != null) {
+      await _deleteArchivedFile(item.filePath!);
+    }
+    if (!mounted) return;
+    setState(
+        () => _events.removeWhere((event) => event.transferId == transferId));
+  }
+
   Future<void> _deleteArchivedFile(String filePath) async {
     final root = _outboxDirectory;
     if (root == null) return;
@@ -521,6 +550,7 @@ class _SendHereHomeState extends State<SendHereHome> {
 
   @override
   void dispose() {
+    _conversationDropChannel.setMethodCallHandler(null);
     _subscription?.cancel();
     _nearbySubscription?.cancel();
     _nearby.stop();
@@ -574,6 +604,7 @@ class _SendHereHomeState extends State<SendHereHome> {
                         editPendingText: _editPendingText,
                         addDroppedFiles: _addFilesToPending,
                         replacePendingCompose: _replacePendingCompose,
+                        cancelOutboxItem: _cancelOutboxItem,
                         selectedPeerId: _selectedPeerId,
                         selectedPeerName: _selectedPeerId == null
                             ? null
@@ -823,6 +854,7 @@ class _ConversationPanel extends StatefulWidget {
     required this.editPendingText,
     required this.addDroppedFiles,
     required this.replacePendingCompose,
+    required this.cancelOutboxItem,
     required this.selectedPeerId,
     required this.selectedPeerName,
     required this.online,
@@ -839,6 +871,7 @@ class _ConversationPanel extends StatefulWidget {
   final ValueChanged<int> editPendingText;
   final ValueChanged<List<String>> addDroppedFiles;
   final ValueChanged<List<NativeComposeItem>> replacePendingCompose;
+  final ValueChanged<String> cancelOutboxItem;
   final String? selectedPeerId;
   final String? selectedPeerName;
   final bool online;
@@ -937,8 +970,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                   controller: _scrollController,
                   padding: const EdgeInsets.all(18),
                   itemCount: messages.length,
-                  itemBuilder: (_, index) =>
-                      _MessageBubble(event: messages[index]),
+                  itemBuilder: (_, index) => _MessageBubble(
+                    event: messages[index],
+                    cancelOutboxItem: widget.cancelOutboxItem,
+                  ),
                 ),
         ),
         const Divider(height: 1),
@@ -1010,8 +1045,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.event});
+  const _MessageBubble({required this.event, required this.cancelOutboxItem});
   final TransferEvent event;
+  final ValueChanged<String> cancelOutboxItem;
 
   @override
   Widget build(BuildContext context) {
@@ -1066,6 +1102,16 @@ class _MessageBubble extends StatelessWidget {
                                 FileTransferStatus.completed) ...[
                           const SizedBox(height: 10),
                           _TransferProgress(event: event),
+                          if (event.fileStatus != FileTransferStatus.uploading)
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton.icon(
+                                onPressed: () =>
+                                    cancelOutboxItem(event.transferId!),
+                                icon: const Icon(Icons.close, size: 16),
+                                label: const Text('取消发送'),
+                              ),
+                            ),
                         ],
                       ])
                     : SelectableText(event.text ?? ''),

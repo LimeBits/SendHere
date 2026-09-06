@@ -1102,23 +1102,31 @@ class _MessageBubble extends StatelessWidget {
                                 FileTransferStatus.completed) ...[
                           const SizedBox(height: 10),
                           _TransferProgress(event: event),
-                          if (event.fileStatus != FileTransferStatus.uploading)
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: TextButton.icon(
-                                onPressed: () =>
-                                    cancelOutboxItem(event.transferId!),
-                                icon: const Icon(Icons.close, size: 16),
-                                label: const Text('取消发送'),
-                              ),
-                            ),
                         ],
                       ])
                     : SelectableText(event.text ?? ''),
               ),
               const SizedBox(height: 3),
-              Text(_messageStatus(sent, event, time),
-                  style: Theme.of(context).textTheme.bodySmall),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(_messageStatus(sent, event, time),
+                    style: Theme.of(context).textTheme.bodySmall),
+                if (sent &&
+                    event.transferId != null &&
+                    (event.fileStatus == FileTransferStatus.waiting ||
+                        event.fileStatus == FileTransferStatus.failed))
+                  TextButton(
+                    onPressed: () => cancelOutboxItem(event.transferId!),
+                    style: TextButton.styleFrom(
+                      foregroundColor:
+                          Theme.of(context).colorScheme.onSurfaceVariant,
+                      minimumSize: const Size(0, 24),
+                      padding: const EdgeInsets.only(left: 6),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    child: const Text('取消发送', style: TextStyle(fontSize: 12)),
+                  ),
+              ]),
             ],
           ),
         ),

@@ -1214,12 +1214,17 @@ class _TransferProgress extends StatelessWidget {
             ),
             TextButton(
               onPressed: cancel,
-              style: TextButton.styleFrom(
-                foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
-                minimumSize: const Size(0, 22),
-                padding: EdgeInsets.zero,
+              style: ButtonStyle(
+                foregroundColor: WidgetStateProperty.resolveWith((states) =>
+                    states.contains(WidgetState.hovered)
+                        ? Theme.of(context).colorScheme.error
+                        : Theme.of(context).colorScheme.onSurfaceVariant),
+                overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+                minimumSize: const WidgetStatePropertyAll(Size(0, 22)),
+                padding: const WidgetStatePropertyAll(EdgeInsets.zero),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
+                visualDensity:
+                    const VisualDensity(horizontal: -4, vertical: -4),
               ),
               child: const Text('取消发送', style: TextStyle(fontSize: 12)),
             ),

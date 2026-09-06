@@ -1101,32 +1101,29 @@ class _MessageBubble extends StatelessWidget {
                             event.fileStatus !=
                                 FileTransferStatus.completed) ...[
                           const SizedBox(height: 10),
-                          _TransferProgress(event: event),
+                          _TransferProgress(
+                            event: event,
+                            cancel: event.fileStatus ==
+                                        FileTransferStatus.waiting ||
+                                    event.fileStatus ==
+                                        FileTransferStatus.failed
+                                ? () => cancelOutboxItem(event.transferId!)
+                                : null,
+                          ),
                         ],
                       ])
                     : SelectableText(event.text ?? ''),
               ),
               const SizedBox(height: 3),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Text(_messageStatus(sent, event, time),
-                    style: Theme.of(context).textTheme.bodySmall),
-                if (sent &&
-                    event.transferId != null &&
-                    (event.fileStatus == FileTransferStatus.waiting ||
-                        event.fileStatus == FileTransferStatus.failed))
-                  TextButton(
-                    onPressed: () => cancelOutboxItem(event.transferId!),
-                    style: TextButton.styleFrom(
-                      foregroundColor:
-                          Theme.of(context).colorScheme.onSurfaceVariant,
-                      minimumSize: const Size(0, 24),
-                      padding: const EdgeInsets.only(left: 6),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    child: const Text('取消发送', style: TextStyle(fontSize: 12)),
-                  ),
-              ]),
+              Text(
+                file &&
+                        sent &&
+                        event.transferId != null &&
+                        event.fileStatus != FileTransferStatus.completed
+                    ? time
+                    : _messageStatus(sent, event, time),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
           ),
         ),
@@ -1162,8 +1159,9 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _TransferProgress extends StatelessWidget {
-  const _TransferProgress({required this.event});
+  const _TransferProgress({required this.event, this.cancel});
   final TransferEvent event;
+  final VoidCallback? cancel;
 
   @override
   Widget build(BuildContext context) {
@@ -1195,11 +1193,38 @@ class _TransferProgress extends StatelessWidget {
               Theme.of(context).colorScheme.surfaceContainerHighest,
         ),
         const SizedBox(height: 5),
-        Text(label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style:
-                Theme.of(context).textTheme.bodySmall?.copyWith(color: color)),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
+            ),
+          ),
+          if (cancel != null) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 7),
+              child: Text('|',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: Theme.of(context).colorScheme.outline)),
+            ),
+            TextButton(
+              onPressed: cancel,
+              style: TextButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+                minimumSize: const Size(0, 22),
+                padding: EdgeInsets.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              ),
+              child: const Text('取消发送', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ]),
       ]),
     );
   }

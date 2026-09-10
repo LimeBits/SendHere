@@ -112,10 +112,13 @@ class _SendHereHomeState extends State<SendHereHome> {
     try {
       await _subscription?.cancel();
       await _server?.stop();
-      final downloads = await getDownloadsDirectory() ??
-          await getApplicationDocumentsDirectory();
+      // iOS sandboxes an app's Downloads location: `getDownloadsDirectory()`
+      // can return a path that exists but cannot be created. Documents is
+      // writable on every supported platform and remains user-visible through
+      // the Files app on iPhone and iPad.
+      final documents = await getApplicationDocumentsDirectory();
       final server = LocalTransferServer(
-        downloadDirectory: Directory(path.join(downloads.path, 'SendHere')),
+        downloadDirectory: Directory(path.join(documents.path, 'SendHere')),
         deviceName: await DeviceName.current(),
       );
       await server.start();

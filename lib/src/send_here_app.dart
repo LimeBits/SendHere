@@ -576,51 +576,57 @@ class _SendHereHomeState extends State<SendHereHome> {
             ? _ErrorView(error: _error!, retry: _startServer)
             : _server == null || url == null
                 ? const Center(child: CircularProgressIndicator())
-                : Row(children: [
-                    SizedBox(
-                      width: 300,
-                      child: _DeviceSidebar(
-                        url: url,
-                        connectedPeers: _connectedPeers.values.toList(),
-                        selectedPeerId: _selectedPeerId,
-                        selectPeer: _selectPeer,
-                        connectPhone: _showPhoneConnectPanel,
-                        phoneQrExpanded: _phoneQrExpanded,
-                        hidePhoneQr: _hidePhoneConnectPanel,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _ConversationPanel(
-                        controller: _textController,
-                        events: _events,
-                        sendPending: _sendPending,
-                        offerFiles: _offerFiles,
-                        pendingItems: _selectedPeerId == null
-                            ? const []
-                            : List.unmodifiable(
-                                _pendingItems[_selectedPeerId] ?? const []),
-                        removePendingItem: _removePendingItem,
-                        editPendingText: _editPendingText,
-                        addDroppedFiles: _addFilesToPending,
-                        replacePendingCompose: _replacePendingCompose,
-                        cancelOutboxItem: _cancelOutboxItem,
-                        selectedPeerId: _selectedPeerId,
-                        selectedPeerName: _selectedPeerId == null
-                            ? null
-                            : _connectedPeers[_selectedPeerId]?.name,
-                        online: _selectedPeerId != null &&
-                            _connectedPeers[_selectedPeerId]?.online == true,
-                        draft: _selectedPeerId == null
-                            ? ''
-                            : _drafts[_selectedPeerId] ?? '',
-                        onDraftChanged: (value) {
-                          final id = _selectedPeerId;
-                          if (id != null) _drafts[id] = value;
-                        },
-                      ),
-                    ),
-                  ]),
+                : LayoutBuilder(builder: (context, constraints) {
+                    final sidebar = _DeviceSidebar(
+                      url: url,
+                      connectedPeers: _connectedPeers.values.toList(),
+                      selectedPeerId: _selectedPeerId,
+                      selectPeer: _selectPeer,
+                      connectPhone: _showPhoneConnectPanel,
+                      phoneQrExpanded: _phoneQrExpanded,
+                      hidePhoneQr: _hidePhoneConnectPanel,
+                    );
+                    final conversation = _ConversationPanel(
+                      controller: _textController,
+                      events: _events,
+                      sendPending: _sendPending,
+                      offerFiles: _offerFiles,
+                      pendingItems: _selectedPeerId == null
+                          ? const []
+                          : List.unmodifiable(
+                              _pendingItems[_selectedPeerId] ?? const []),
+                      removePendingItem: _removePendingItem,
+                      editPendingText: _editPendingText,
+                      addDroppedFiles: _addFilesToPending,
+                      replacePendingCompose: _replacePendingCompose,
+                      cancelOutboxItem: _cancelOutboxItem,
+                      selectedPeerId: _selectedPeerId,
+                      selectedPeerName: _selectedPeerId == null
+                          ? null
+                          : _connectedPeers[_selectedPeerId]?.name,
+                      online: _selectedPeerId != null &&
+                          _connectedPeers[_selectedPeerId]?.online == true,
+                      draft: _selectedPeerId == null
+                          ? ''
+                          : _drafts[_selectedPeerId] ?? '',
+                      onDraftChanged: (value) {
+                        final id = _selectedPeerId;
+                        if (id != null) _drafts[id] = value;
+                      },
+                    );
+                    if (constraints.maxWidth < 700) {
+                      return Column(children: [
+                        SizedBox(height: 210, child: sidebar),
+                        const SizedBox(height: 12),
+                        Expanded(child: conversation),
+                      ]);
+                    }
+                    return Row(children: [
+                      SizedBox(width: 300, child: sidebar),
+                      const SizedBox(width: 16),
+                      Expanded(child: conversation),
+                    ]);
+                  }),
       ),
     );
   }
@@ -1077,7 +1083,7 @@ class _MessageBubble extends StatelessWidget {
                 child: file
                     ? Column(mainAxisSize: MainAxisSize.min, children: [
                         InkWell(
-                          onTap: event.localPath == null
+                          onTap: event.localPath == null || !Platform.isMacOS
                               ? null
                               : () =>
                                   Process.run('open', ['-R', event.localPath!]),

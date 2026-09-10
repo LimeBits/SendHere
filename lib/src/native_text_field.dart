@@ -56,14 +56,26 @@ class NativeTextField extends StatefulWidget {
 
 class NativeTextFieldState extends State<NativeTextField> {
   MethodChannel? _channel;
+  final _mobileController = TextEditingController();
+  final _mobileFocusNode = FocusNode();
   bool _skipNextComposeUpdate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _mobileController.text = widget.initialText;
+  }
 
   Future<void> clear() async {
     developer.log('Clearing native text field', name: 'SendHere.Input');
+    _mobileController.clear();
     await _channel?.invokeMethod<void>('setText', '');
   }
 
-  Future<void> focus() async => _channel?.invokeMethod<void>('focus');
+  Future<void> focus() async {
+    _mobileFocusNode.requestFocus();
+    await _channel?.invokeMethod<void>('focus');
+  }
 
   Future<void> _setCompose() =>
       _channel?.invokeMethod<void>(
@@ -137,9 +149,20 @@ class NativeTextFieldState extends State<NativeTextField> {
       return;
     }
     if (composeChanged) {
-      developer.log('Updating native compose field', name: 'SendHere.Input');
+      developer.log('Updating native text field', name: 'SendHere.Input');
+      _mobileController.value = TextEditingValue(
+        text: widget.initialText,
+        selection: TextSelection.collapsed(offset: widget.initialText.length),
+      );
       _setCompose();
     }
+  }
+
+  @override
+  void dispose() {
+    _mobileController.dispose();
+    _mobileFocusNode.dispose();
+    super.dispose();
   }
 
   bool _sameComposeItems(
@@ -158,7 +181,9 @@ class NativeTextFieldState extends State<NativeTextField> {
   }
 
   @override
-  Widget build(BuildContext context) => SizedBox(
+  Widget build(BuildContext context) {
+    if (defaultTargetPlatform == TargetPlatform.macOS) {
+      return SizedBox(
         height: widget.height,
         child: AppKitView(
           viewType: NativeTextField.viewType,
@@ -166,4 +191,28 @@ class NativeTextFieldState extends State<NativeTextField> {
           gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
         ),
       );
+    }
+
+    // iOS and Android do not host the macOS AppKit editor. Their standard
+    // Flutter input path provides IME, paste and the on-screen keyboard.
+    return SizedBox(
+      height: widget.height,
+      child: TextField(
+        controller: _mobileController,
+        focusNode: _mobileFocusNode,
+        expands: true,
+        maxLines: null,
+        minLines: null,
+        textAlignVertical: TextAlignVertical.top,
+        textInputAction: TextInputAction.send,
+        decoration: const InputDecoration(
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          hintText: '输入消息',
+        ),
+        onChanged: widget.onChanged,
+        onSubmitted: widget.onSubmitted,
+      ),
+    );
+  }
 }

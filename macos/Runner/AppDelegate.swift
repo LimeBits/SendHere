@@ -72,6 +72,9 @@ final class StatusBarController: NSObject {
   }
 
   private static func makeIcon() -> NSImage? {
+    // Like VoxHere, use a monochrome template rather than a fixed light-grey
+    // mark. AppKit then supplies the correct contrast for both light and dark
+    // menu bars, including the older macOS 12 status-bar appearance.
     let size = NSSize(width: 16, height: 16)
     let image = NSImage(size: size)
     image.lockFocus()
@@ -79,12 +82,8 @@ final class StatusBarController: NSObject {
 
     guard let context = NSGraphicsContext.current else { return nil }
     context.shouldAntialias = true
-    // A light rounded-square background restores the recognisable app mark.
-    // The transfer symbol is cut out with clear blending, revealing the actual
-    // menu-bar behind it rather than using a second, fixed arrow colour.
-    // Use the subdued system-control grey instead of pure white so the badge
-    // sits with Sonoma's other menu-bar controls rather than looking self-lit.
-    NSColor(calibratedWhite: 0.84, alpha: 1).setFill()
+
+    NSColor.black.setFill()
     NSBezierPath(
       roundedRect: NSRect(x: 0.6, y: 0.6, width: 14.8, height: 14.8),
       xRadius: 4.1,
@@ -95,9 +94,7 @@ final class StatusBarController: NSObject {
     arrow.lineCapStyle = .round
     arrow.lineJoinStyle = .round
 
-    // One shaft with wide-open arrowheads at its ends.
-    // Extend the shaft through both tips to keep all three strokes visually
-    // connected at small menu-bar sizes.
+    // A bidirectional transfer mark cut out from the template silhouette.
     arrow.move(to: NSPoint(x: 3.5, y: 8.0))
     arrow.line(to: NSPoint(x: 12.5, y: 8.0))
     arrow.move(to: NSPoint(x: 5.6, y: 9.9))
@@ -111,7 +108,7 @@ final class StatusBarController: NSObject {
     arrow.stroke()
     NSGraphicsContext.restoreGraphicsState()
 
-    image.isTemplate = false
+    image.isTemplate = true
     return image
   }
 }

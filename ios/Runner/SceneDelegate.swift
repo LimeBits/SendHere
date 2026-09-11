@@ -1,8 +1,10 @@
 import Flutter
 import UIKit
+import UserNotifications
 
 class SceneDelegate: FlutterSceneDelegate {
   private var documentController: UIDocumentInteractionController?
+  private var notificationAuthorizationRequested = false
 
   override func scene(
     _ scene: UIScene,
@@ -30,6 +32,25 @@ class SceneDelegate: FlutterSceneDelegate {
       result(name.isEmpty ? UIDevice.current.model : name)
     }
 
+    let notificationChannel = FlutterMethodChannel(
+      name: "sendhere/notifications", binaryMessenger: controller.binaryMessenger)
+    notificationChannel.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "setUnreadCount":
+        let arguments = call.arguments as? [String: Any]
+        UIApplication.shared.applicationIconBadgeNumber = arguments?["count"] as? Int ?? 0
+        result(nil)
+      case "show":
+        let arguments = call.arguments as? [String: Any]
+        self?.showNotification(
+          title: arguments?["title"] as? String ?? "SendHere",
+          body: arguments?["body"] as? String ?? "你收到了新消息")
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     let fileChannel = FlutterMethodChannel(
       name: "sendhere/mobile_file", binaryMessenger: controller.binaryMessenger)
     fileChannel.setMethodCallHandler { [weak self, weak controller] call, result in
@@ -53,6 +74,31 @@ class SceneDelegate: FlutterSceneDelegate {
       documentController.presentOptionsMenu(
         from: view.bounds, in: view, animated: true)
       result(nil)
+    }
+  }
+
+  private func showNotification(title: String, body: String) {
+    let scheduleNotification = {
+      let content = UNMutableNotificationContent()
+      content.title = title
+      content.body = body
+      content.sound = .default
+      let request = UNNotificationRequest(
+        identifier: UUID().uuidString,
+        content: content,
+        trigger: UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false))
+      UNUserNotificationCenter.current().add(request)
+    }
+
+    guard !notificationAuthorizationRequested else {
+      scheduleNotification()
+      return
+    }
+    notificationAuthorizationRequested = true
+    UNUserNotificationCenter.current().requestAuthorization(
+      options: [.alert, .badge, .sound]
+    ) { granted, _ in
+      if granted { scheduleNotification() }
     }
   }
 }

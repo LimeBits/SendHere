@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import UserNotifications
 
 /// Owns the menu bar item. A single strong static reference keeps both the
 /// status item and its action target alive for the whole app lifetime; an
@@ -9,6 +10,7 @@ final class StatusBarController: NSObject {
 
   private var statusItem: NSStatusItem?
   private(set) weak var mainWindow: NSWindow?
+  private var notificationAuthorizationRequested = false
 
   func remember(window: NSWindow) {
     mainWindow = window
@@ -17,17 +19,43 @@ final class StatusBarController: NSObject {
   func install() {
     guard statusItem == nil else { return }
 
-    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     guard let button = item.button else { return }
 
     button.image = Self.makeIcon()
-    button.imagePosition = .imageOnly
+    button.imagePosition = .imageLeft
     button.target = self
     button.action = #selector(statusItemClicked)
     button.sendAction(on: [.leftMouseUp, .rightMouseUp])
     button.toolTip = "SendHere · 传到这（左键打开窗口，右键菜单）"
 
     statusItem = item
+    requestNotificationAuthorization()
+  }
+
+  func setUnreadCount(_ count: Int) {
+    guard let button = statusItem?.button else { return }
+    button.title = count > 0 ? " \(min(count, 99))" : ""
+    button.toolTip = count > 0
+      ? "SendHere · \(count) 条未读消息（左键打开窗口，右键菜单）"
+      : "SendHere · 传到这（左键打开窗口，右键菜单）"
+  }
+
+  func showNotification(title: String, body: String) {
+    let content = UNMutableNotificationContent()
+    content.title = title
+    content.body = body
+    content.sound = .default
+    let request = UNNotificationRequest(
+      identifier: UUID().uuidString, content: content, trigger: nil)
+    UNUserNotificationCenter.current().add(request)
+  }
+
+  private func requestNotificationAuthorization() {
+    guard !notificationAuthorizationRequested else { return }
+    notificationAuthorizationRequested = true
+    UNUserNotificationCenter.current().requestAuthorization(
+      options: [.alert, .sound]) { _, _ in }
   }
 
   @objc private func statusItemClicked() {

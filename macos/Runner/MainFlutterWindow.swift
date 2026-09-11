@@ -73,6 +73,7 @@ private final class ConversationContainerController: NSViewController {
 
 class MainFlutterWindow: NSWindow {
   private var conversationDropChannel: FlutterMethodChannel?
+  private var notificationChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -98,6 +99,25 @@ class MainFlutterWindow: NSWindow {
         return
       }
       result(Host.current().localizedName)
+    }
+
+    notificationChannel = FlutterMethodChannel(
+      name: "sendhere/notifications", binaryMessenger: flutterViewController.engine.binaryMessenger)
+    notificationChannel?.setMethodCallHandler { call, result in
+      switch call.method {
+      case "setUnreadCount":
+        let arguments = call.arguments as? [String: Any]
+        StatusBarController.shared.setUnreadCount(arguments?["count"] as? Int ?? 0)
+        result(nil)
+      case "show":
+        let arguments = call.arguments as? [String: Any]
+        StatusBarController.shared.showNotification(
+          title: arguments?["title"] as? String ?? "SendHere",
+          body: arguments?["body"] as? String ?? "你收到了新消息")
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
     }
 
     let registrar = flutterViewController.registrar(forPlugin: "NativeTextField")

@@ -21,6 +21,7 @@ import 'outbox.dart';
 import 'transfer_event.dart';
 
 const _mobileFileChannel = MethodChannel('sendhere/mobile_file');
+const _notificationChannel = MethodChannel('sendhere/notifications');
 
 Future<void> _openReceivedFile(BuildContext context, String filePath) async {
   try {
@@ -199,6 +200,11 @@ class _SendHereHomeState extends State<SendHereHome>
   bool _phoneQrExpanded = false;
   bool _showMobileConversation = false;
   bool _restartingForForeground = false;
+  AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
+  final _unreadCounts = <String, int>{};
+
+  int get _unreadCount =>
+      _unreadCounts.values.fold(0, (total, count) => total + count);
 
   static const _recentDevicesKey = 'sendhere-recent-devices';
   static const _conversationDropChannel =
@@ -221,9 +227,60 @@ class _SendHereHomeState extends State<SendHereHome>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed &&
-        (Platform.isIOS || Platform.isAndroid)) {
-      unawaited(_restartAfterForeground());
+    _lifecycleState = state;
+    if (state == AppLifecycleState.resumed) {
+      _markAllVisibleMessagesRead();
+      if (Platform.isIOS || Platform.isAndroid) {
+        unawaited(_restartAfterForeground());
+      }
+    }
+  }
+
+  void _markAllVisibleMessagesRead() {
+    if (_unreadCounts.isEmpty) return;
+    setState(_unreadCounts.clear);
+    unawaited(_updateNotificationBadge());
+  }
+
+  Future<void> _updateNotificationBadge() async {
+    if (!Platform.isIOS && !Platform.isMacOS) return;
+    try {
+      await _notificationChannel
+          .invokeMethod<void>('setUnreadCount', {'count': _unreadCount});
+    } on PlatformException {
+      // Notifications are an enhancement and must not interrupt transfers.
+    }
+  }
+
+  Future<void> _notifyIncomingMessage(TransferEvent event) async {
+    final deviceId = event.deviceId;
+    if (deviceId == null || event.direction != TransferDirection.received) {
+      return;
+    }
+    final viewingConversation = _lifecycleState == AppLifecycleState.resumed &&
+        _selectedPeerId == deviceId &&
+        (!Platform.isIOS && !Platform.isAndroid || _showMobileConversation);
+    if (viewingConversation) return;
+    if (mounted) {
+      setState(() {
+        _unreadCounts.update(deviceId, (count) => count + 1, ifAbsent: () => 1);
+      });
+    }
+    await _updateNotificationBadge();
+    if (_lifecycleState != AppLifecycleState.resumed &&
+        (Platform.isIOS || Platform.isMacOS)) {
+      final name = event.clientName ?? _connectedPeers[deviceId]?.name ?? '设备';
+      final body = event.type == TransferEventType.file
+          ? '向你发送了文件：${event.fileName ?? '文件'}'
+          : event.text ?? '向你发送了一条消息';
+      try {
+        await _notificationChannel.invokeMethod<void>('show', {
+          'title': name,
+          'body': body,
+        });
+      } on PlatformException {
+        // The transfer has completed even when notification permission is off.
+      }
     }
   }
 
@@ -329,6 +386,10 @@ class _SendHereHomeState extends State<SendHereHome>
           }
         });
         _saveRecentDevices();
+        if (event.type == TransferEventType.text ||
+            event.type == TransferEventType.file) {
+          unawaited(_notifyIncomingMessage(event));
+        }
         if (event.type == TransferEventType.clientConnected &&
             event.deviceId != null) {
           unawaited(_deliverOutbox(event.deviceId!));
@@ -725,6 +786,9 @@ class _SendHereHomeState extends State<SendHereHome>
   }
 
   Future<void> _selectPeer(String id) async {
+    if (_unreadCounts.remove(id) != null) {
+      unawaited(_updateNotificationBadge());
+    }
     final previousId = _selectedPeerId;
     if (previousId != null) {
       _drafts[previousId] = _textController.text;
@@ -753,6 +817,9 @@ class _SendHereHomeState extends State<SendHereHome>
   }
 
   Future<void> _deleteConversation(String deviceId) async {
+    if (_unreadCounts.remove(deviceId) != null) {
+      unawaited(_updateNotificationBadge());
+    }
     final removedOutboxItems = await _outbox.removeForDevice(deviceId);
     for (final item in removedOutboxItems) {
       if (item.isFile && item.filePath != null) {
@@ -1074,7 +1141,9 @@ class _DeviceTile extends StatelessWidget {
             style: const TextStyle(fontSize: 12)),
         trailing: device.online
             ? const Icon(Icons.circle, size: 10, color: Colors.green)
-            : const Icon(Icons.cloud_off_outlined),
+            : Icon(Icons.cloud_off_outlined,
+                size: 16,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
         onTap: () => select(device.id),
       ),
     );
@@ -1107,7 +1176,10 @@ class _DeviceTile extends StatelessWidget {
     }
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onSecondaryTapDown: (details) => _showDesktopMenu(context, details),
+      onSecondaryTapDown: (details) {
+        select(device.id);
+        _showDesktopMenu(context, details);
+      },
       child: tile,
     );
   }

@@ -42,6 +42,10 @@ final class StatusBarController: NSObject {
   }
 
   func showNotification(title: String, body: String) {
+    // Flutter stays in the resumed lifecycle state when a macOS window loses
+    // focus. Use AppKit window state so notifications still work after the
+    // user switches apps, minimizes, or hides SendHere.
+    guard shouldPresentIncomingNotification else { return }
     let content = UNMutableNotificationContent()
     content.title = title
     content.body = body
@@ -49,6 +53,11 @@ final class StatusBarController: NSObject {
     let request = UNNotificationRequest(
       identifier: UUID().uuidString, content: content, trigger: nil)
     UNUserNotificationCenter.current().add(request)
+  }
+
+  var shouldPresentIncomingNotification: Bool {
+    guard let window = mainWindow else { return true }
+    return !NSApp.isActive || !window.isVisible || window.isMiniaturized || !window.isKeyWindow
   }
 
   private func requestNotificationAuthorization() {

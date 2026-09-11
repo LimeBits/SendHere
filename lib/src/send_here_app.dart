@@ -257,9 +257,20 @@ class _SendHereHomeState extends State<SendHereHome>
     if (deviceId == null || event.direction != TransferDirection.received) {
       return;
     }
+    var macOSWindowInactive = false;
+    if (Platform.isMacOS) {
+      try {
+        macOSWindowInactive =
+            await _notificationChannel.invokeMethod<bool>('shouldNotify') ??
+                false;
+      } on PlatformException {
+        // If the native state cannot be read, keep the conservative default.
+      }
+    }
     final viewingConversation = _lifecycleState == AppLifecycleState.resumed &&
         _selectedPeerId == deviceId &&
-        (!Platform.isIOS && !Platform.isAndroid || _showMobileConversation);
+        (!Platform.isIOS && !Platform.isAndroid || _showMobileConversation) &&
+        !macOSWindowInactive;
     if (viewingConversation) return;
     if (mounted) {
       setState(() {
@@ -267,8 +278,8 @@ class _SendHereHomeState extends State<SendHereHome>
       });
     }
     await _updateNotificationBadge();
-    if (_lifecycleState != AppLifecycleState.resumed &&
-        (Platform.isIOS || Platform.isMacOS)) {
+    if (macOSWindowInactive ||
+        (_lifecycleState != AppLifecycleState.resumed && Platform.isIOS)) {
       final name = event.clientName ?? _connectedPeers[deviceId]?.name ?? '设备';
       final body = event.type == TransferEventType.file
           ? '向你发送了文件：${event.fileName ?? '文件'}'
@@ -896,6 +907,7 @@ class _SendHereHomeState extends State<SendHereHome>
                     final sidebar = _DeviceSidebar(
                       url: url,
                       connectedPeers: _connectedPeers.values.toList(),
+                      unreadCounts: _unreadCounts,
                       selectedPeerId: _selectedPeerId,
                       selectPeer:
                           mobile ? _openMobileConversation : _selectPeer,
@@ -999,6 +1011,7 @@ class _DeviceSidebar extends StatefulWidget {
   const _DeviceSidebar({
     required this.url,
     required this.connectedPeers,
+    required this.unreadCounts,
     required this.selectedPeerId,
     required this.selectPeer,
     required this.connectPhone,
@@ -1010,6 +1023,7 @@ class _DeviceSidebar extends StatefulWidget {
 
   final String url;
   final List<_PeerDevice> connectedPeers;
+  final Map<String, int> unreadCounts;
   final String? selectedPeerId;
   final ValueChanged<String> selectPeer;
   final VoidCallback connectPhone;
@@ -1029,71 +1043,159 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
     if (_revealedDeviceId != null) setState(() => _revealedDeviceId = null);
   }
 
+  List<_PeerDevice> get _sortedPeers => List<_PeerDevice>.from(
+        widget.connectedPeers,
+      )..sort((a, b) {
+          if (a.online != b.online) return a.online ? -1 : 1;
+          return b.lastSeenAt.compareTo(a.lastSeenAt);
+        });
+
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: _collapseActions,
-        child: Card(
-          clipBehavior: Clip.antiAlias,
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 18, 16, 10),
-              child: Text('设备列表',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-            ),
-            Expanded(
-              child: widget.connectedPeers.isEmpty
-                  ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Text('暂无设备\n附近电脑会自动显示在这里',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.black54)),
+  Widget build(BuildContext context) {
+    final peers = _sortedPeers;
+    final mobile = Platform.isIOS || Platform.isAndroid;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: _collapseActions,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 18, 16, 10),
+            child: Text('设备列表',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            child: widget.connectedPeers.isEmpty
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('暂无设备\n附近电脑会自动显示在这里',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.black54)),
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: peers.length,
+                    itemBuilder: (context, index) {
+                      final device = peers[index];
+                      return _DeviceTile(
+                        device: device,
+                        unreadCount: widget.unreadCounts[device.id] ?? 0,
+                        selected: !mobile && widget.selectedPeerId == device.id,
+                        select: (id) {
+                          _collapseActions();
+                          widget.selectPeer(id);
+                        },
+                        deleteConversation: widget.deleteConversation,
+                        revealed: _revealedDeviceId == device.id,
+                        reveal: () =>
+                            setState(() => _revealedDeviceId = device.id),
+                        collapse: _collapseActions,
+                      );
+                    },
+                    separatorBuilder: (_, __) => mobile
+                        ? Divider(
+                            height: 1,
+                            thickness: 0.5,
+                            indent: 72,
+                            color: Theme.of(context)
+                                .dividerColor
+                                .withValues(alpha: 0.55),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+          ),
+          if (widget.showPhoneConnection) ...[
+            const Divider(height: 1),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              child: widget.phoneQrExpanded
+                  ? _PhoneConnectCard(
+                      url: widget.url, onCollapse: widget.hidePhoneQr)
+                  : Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: FilledButton.icon(
+                        onPressed: widget.connectPhone,
+                        icon: const Icon(Icons.phone_iphone_outlined),
+                        label: const Text('连接手机'),
                       ),
-                    )
-                  : ListView(
-                      children: (List<_PeerDevice>.from(widget.connectedPeers)
-                            ..sort((a, b) {
-                              if (a.online != b.online) {
-                                return a.online ? -1 : 1;
-                              }
-                              return b.lastSeenAt.compareTo(a.lastSeenAt);
-                            }))
-                          .map((device) => _DeviceTile(
-                              device: device,
-                              selected: widget.selectedPeerId == device.id,
-                              select: (id) {
-                                _collapseActions();
-                                widget.selectPeer(id);
-                              },
-                              deleteConversation: widget.deleteConversation,
-                              revealed: _revealedDeviceId == device.id,
-                              reveal: () =>
-                                  setState(() => _revealedDeviceId = device.id),
-                              collapse: _collapseActions))
-                          .toList(),
                     ),
             ),
-            if (widget.showPhoneConnection) ...[
-              const Divider(height: 1),
-              AnimatedSize(
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOut,
-                child: widget.phoneQrExpanded
-                    ? _PhoneConnectCard(
-                        url: widget.url, onCollapse: widget.hidePhoneQr)
-                    : Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: FilledButton.icon(
-                          onPressed: widget.connectPhone,
-                          icon: const Icon(Icons.phone_iphone_outlined),
-                          label: const Text('连接手机'),
-                        ),
-                      ),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
+class _UnreadBadge extends StatelessWidget {
+  const _UnreadBadge({required this.count, this.compact = false});
+
+  final int count;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = count > 99 ? '99+' : '$count';
+    final fontSize = compact ? 9.0 : 11.0;
+    return Container(
+      constraints: BoxConstraints(
+          minWidth: compact ? 16 : 20, minHeight: compact ? 16 : 20),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 3 : 5),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.red,
+        borderRadius: BorderRadius.circular(count > 9 ? 10 : 999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: fontSize,
+          fontWeight: FontWeight.w700,
+          height: 1,
+        ),
+      ),
+    );
+  }
+}
+
+class _DeviceAvatar extends StatelessWidget {
+  const _DeviceAvatar({
+    required this.phone,
+    required this.online,
+    required this.unreadCount,
+  });
+
+  final bool phone;
+  final bool online;
+  final int unreadCount;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 44,
+        height: 44,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            CircleAvatar(
+              backgroundColor: online
+                  ? null
+                  : Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: Icon(phone
+                  ? Icons.phone_iphone_outlined
+                  : Icons.computer_outlined),
+            ),
+            if (unreadCount > 0 && (Platform.isIOS || Platform.isAndroid))
+              Positioned(
+                top: -2,
+                right: -3,
+                child: _UnreadBadge(count: unreadCount, compact: true),
               ),
-            ],
-          ]),
+          ],
         ),
       );
 }
@@ -1101,6 +1203,7 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
 class _DeviceTile extends StatelessWidget {
   const _DeviceTile({
     required this.device,
+    required this.unreadCount,
     required this.selected,
     required this.select,
     required this.deleteConversation,
@@ -1110,6 +1213,7 @@ class _DeviceTile extends StatelessWidget {
   });
 
   final _PeerDevice device;
+  final int unreadCount;
   final bool selected;
   final ValueChanged<String> select;
   final ValueChanged<String> deleteConversation;
@@ -1125,12 +1229,11 @@ class _DeviceTile extends StatelessWidget {
       child: ListTile(
         selected: selected,
         selectedTileColor: Theme.of(context).colorScheme.secondaryContainer,
-        leading: CircleAvatar(
-            backgroundColor: device.online
-                ? null
-                : Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: Icon(
-                phone ? Icons.phone_iphone_outlined : Icons.computer_outlined)),
+        leading: _DeviceAvatar(
+          phone: phone,
+          online: device.online,
+          unreadCount: unreadCount,
+        ),
         minVerticalPadding: 7,
         title: Text(device.name,
             maxLines: 1,
@@ -1139,11 +1242,23 @@ class _DeviceTile extends StatelessWidget {
         subtitle: Text(
             device.online ? '在线' : _lastSeenLabel(context, device.lastSeenAt),
             style: const TextStyle(fontSize: 12)),
-        trailing: device.online
-            ? const Icon(Icons.circle, size: 10, color: Colors.green)
-            : Icon(Icons.cloud_off_outlined,
-                size: 16,
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (unreadCount > 0 && !(Platform.isIOS || Platform.isAndroid))
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: _UnreadBadge(count: unreadCount),
+              ),
+            device.online
+                ? const Icon(Icons.circle, size: 10, color: Colors.green)
+                : Icon(
+                    Icons.cloud_off_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+          ],
+        ),
         onTap: () => select(device.id),
       ),
     );

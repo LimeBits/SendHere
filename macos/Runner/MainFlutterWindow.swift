@@ -115,6 +115,8 @@ class MainFlutterWindow: NSWindow {
           title: arguments?["title"] as? String ?? "SendHere",
           body: arguments?["body"] as? String ?? "你收到了新消息")
         result(nil)
+      case "shouldNotify":
+        result(StatusBarController.shared.shouldPresentIncomingNotification)
       default:
         result(FlutterMethodNotImplemented)
       }

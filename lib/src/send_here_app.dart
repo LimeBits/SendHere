@@ -1019,6 +1019,22 @@ class _DeviceTile extends StatelessWidget {
         deviceId: device.id,
         confirmDelete: () => _confirmDelete(context),
         deleteConversation: deleteConversation,
+        revealedChild: Material(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: ListTile(
+            minVerticalPadding: 7,
+            title: Text(
+              device.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+            subtitle: Text(
+              device.online ? '在线' : _lastSeenLabel(context, device.lastSeenAt),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ),
         child: tile,
       );
     }
@@ -1146,12 +1162,14 @@ class _SwipeConversationTile extends StatefulWidget {
     required this.confirmDelete,
     required this.deleteConversation,
     required this.child,
+    required this.revealedChild,
   });
 
   final String deviceId;
   final Future<bool?> Function() confirmDelete;
   final ValueChanged<String> deleteConversation;
   final Widget child;
+  final Widget revealedChild;
 
   @override
   State<_SwipeConversationTile> createState() => _SwipeConversationTileState();
@@ -1160,17 +1178,35 @@ class _SwipeConversationTile extends StatefulWidget {
 class _SwipeConversationTileState extends State<_SwipeConversationTile> {
   static const _actionWidth = 88.0;
   double _offset = 0;
+  bool _revealed = false;
 
   void _handleDragUpdate(DragUpdateDetails details) {
+    if (_revealed) return;
     setState(() {
       _offset = (_offset + details.delta.dx).clamp(-_actionWidth, 0.0);
     });
   }
 
   void _handleDragEnd(DragEndDetails details) {
+    if (_revealed) {
+      if (details.velocity.pixelsPerSecond.dx > 250) _collapse();
+      return;
+    }
     final shouldReveal = _offset.abs() > _actionWidth / 2 ||
         details.velocity.pixelsPerSecond.dx < -450;
-    setState(() => _offset = shouldReveal ? -_actionWidth : 0);
+    setState(() {
+      _revealed = shouldReveal;
+      _offset = 0;
+    });
+  }
+
+  void _collapse() {
+    if (_revealed || _offset != 0) {
+      setState(() {
+        _revealed = false;
+        _offset = 0;
+      });
+    }
   }
 
   Future<void> _delete() async {
@@ -1178,51 +1214,69 @@ class _SwipeConversationTileState extends State<_SwipeConversationTile> {
     widget.deleteConversation(widget.deviceId);
   }
 
-  @override
-  Widget build(BuildContext context) => ClipRect(
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: SizedBox(
-                  width: _actionWidth,
-                  child: Material(
-                    color: Theme.of(context).colorScheme.error,
-                    child: InkWell(
-                      onTap: _delete,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.delete_outline,
-                              color: Theme.of(context).colorScheme.onError),
-                          const SizedBox(height: 2),
-                          Text('删除',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color:
-                                      Theme.of(context).colorScheme.onError)),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+  Widget _deleteAction(BuildContext context) => SizedBox(
+        width: _actionWidth,
+        child: Material(
+          color: Theme.of(context).colorScheme.error,
+          child: InkWell(
+            onTap: _delete,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.delete_outline,
+                    color: Theme.of(context).colorScheme.onError),
+                const SizedBox(height: 2),
+                Text('删除',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onError)),
+              ],
             ),
-            AnimatedSlide(
-              offset: Offset(_offset / _actionWidth, 0),
-              duration: const Duration(milliseconds: 160),
-              curve: Curves.easeOut,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onHorizontalDragUpdate: _handleDragUpdate,
-                onHorizontalDragEnd: _handleDragEnd,
-                child: widget.child,
-              ),
-            ),
-          ],
+          ),
         ),
       );
+
+  @override
+  Widget build(BuildContext context) {
+    if (_revealed) {
+      return Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _collapse,
+              onHorizontalDragEnd: _handleDragEnd,
+              child: widget.revealedChild,
+            ),
+          ),
+          _deleteAction(context),
+        ],
+      );
+    }
+    return ClipRect(
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: _deleteAction(context),
+            ),
+          ),
+          AnimatedSlide(
+            offset: Offset(_offset / _actionWidth, 0),
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.easeOut,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragUpdate: _handleDragUpdate,
+              onHorizontalDragEnd: _handleDragEnd,
+              child: widget.child,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _PhoneConnectCard extends StatelessWidget {

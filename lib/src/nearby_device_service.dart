@@ -36,6 +36,7 @@ class NearbyDeviceService {
   Stream<List<NearbyDevice>> get devices => _devices.stream;
 
   Future<void> start({required int port}) async {
+    await pause();
     final preferences = await SharedPreferences.getInstance();
     deviceId = preferences.getString('sendhere-device-id');
     if (deviceId == null) {
@@ -95,10 +96,18 @@ class NearbyDeviceService {
     }
   }
 
-  Future<void> stop() async {
+  Future<void> pause() async {
     await _subscription?.cancel();
+    _subscription = null;
     await _discovery?.stop();
+    _discovery = null;
     await _broadcast?.stop();
+    _broadcast = null;
+    _known.clear();
+  }
+
+  Future<void> dispose() async {
+    await pause();
     await _devices.close();
   }
 }

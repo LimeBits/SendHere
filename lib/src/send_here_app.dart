@@ -19,6 +19,26 @@ import 'native_text_field.dart';
 import 'outbox.dart';
 import 'transfer_event.dart';
 
+const _mobileFileChannel = MethodChannel('sendhere/mobile_file');
+
+Future<void> _openReceivedFile(BuildContext context, String filePath) async {
+  try {
+    if (Platform.isMacOS) {
+      await Process.run('open', ['-R', filePath]);
+      return;
+    }
+    if (Platform.isIOS || Platform.isAndroid) {
+      await _mobileFileChannel.invokeMethod<void>('open', {'path': filePath});
+    }
+  } on PlatformException catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message ?? '无法打开文件')),
+      );
+    }
+  }
+}
+
 class SendHereApp extends StatelessWidget {
   const SendHereApp({super.key});
 
@@ -37,7 +57,8 @@ class SendHereHome extends StatefulWidget {
   State<SendHereHome> createState() => _SendHereHomeState();
 }
 
-class _SendHereHomeState extends State<SendHereHome> {
+class _SendHereHomeState extends State<SendHereHome>
+    with WidgetsBindingObserver {
   final _events = <TransferEvent>[];
   final _textController = TextEditingController();
   final _nearby = NearbyDeviceService();
@@ -57,6 +78,7 @@ class _SendHereHomeState extends State<SendHereHome> {
   String? _selectedPeerId;
   bool _phoneQrExpanded = false;
   bool _showMobileConversation = false;
+  bool _restartingForForeground = false;
 
   static const _recentDevicesKey = 'sendhere-recent-devices';
   static const _conversationDropChannel =
@@ -65,6 +87,7 @@ class _SendHereHomeState extends State<SendHereHome> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _conversationDropChannel.setMethodCallHandler((call) async {
       if (call.method == 'filesDropped') {
         final paths = (call.arguments as List<dynamic>? ?? const [])
@@ -74,6 +97,24 @@ class _SendHereHomeState extends State<SendHereHome> {
       }
     });
     _loadInitialState().whenComplete(_startServer);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        (Platform.isIOS || Platform.isAndroid)) {
+      unawaited(_restartAfterForeground());
+    }
+  }
+
+  Future<void> _restartAfterForeground() async {
+    if (_restartingForForeground || _server == null) return;
+    _restartingForForeground = true;
+    try {
+      await _startServer();
+    } finally {
+      _restartingForForeground = false;
+    }
   }
 
   Future<void> _loadInitialState() async {
@@ -112,6 +153,10 @@ class _SendHereHomeState extends State<SendHereHome> {
   Future<void> _startServer() async {
     try {
       await _subscription?.cancel();
+      await _nearbySubscription?.cancel();
+      await _nearby.pause();
+      _discoveredComputerIds.clear();
+      _connectingPeerIds.clear();
       await _server?.stop();
       // iOS sandboxes an app's Downloads location: `getDownloadsDirectory()`
       // can return a path that exists but cannot be created. Documents is
@@ -559,10 +604,11 @@ class _SendHereHomeState extends State<SendHereHome> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _conversationDropChannel.setMethodCallHandler(null);
     _subscription?.cancel();
     _nearbySubscription?.cancel();
-    _nearby.stop();
+    _nearby.dispose();
     _server?.stop();
     _textController.dispose();
     super.dispose();
@@ -1111,10 +1157,10 @@ class _MessageBubble extends StatelessWidget {
                 child: file
                     ? Column(mainAxisSize: MainAxisSize.min, children: [
                         InkWell(
-                          onTap: event.localPath == null || !Platform.isMacOS
+                          onTap: event.localPath == null
                               ? null
                               : () =>
-                                  Process.run('open', ['-R', event.localPath!]),
+                                  _openReceivedFile(context, event.localPath!),
                           child: image && event.localPath != null
                               ? ConstrainedBox(
                                   constraints:

@@ -1012,18 +1012,10 @@ class _DeviceTile extends StatelessWidget {
       onTap: () => select(device.id),
     );
     if (Platform.isIOS || Platform.isAndroid) {
-      return Dismissible(
-        key: ValueKey(device.id),
-        direction: DismissDirection.endToStart,
-        confirmDismiss: (_) => _confirmDelete(context),
-        onDismissed: (_) => deleteConversation(device.id),
-        background: Container(
-          alignment: Alignment.centerRight,
-          padding: const EdgeInsets.only(right: 24),
-          color: Theme.of(context).colorScheme.error,
-          child: Icon(Icons.delete_outline,
-              color: Theme.of(context).colorScheme.onError),
-        ),
+      return _SwipeConversationTile(
+        deviceId: device.id,
+        confirmDelete: () => _confirmDelete(context),
+        deleteConversation: deleteConversation,
         child: tile,
       );
     }
@@ -1088,6 +1080,91 @@ class _DeviceTile extends StatelessWidget {
     }
     return '${time.year}/${time.month}/${time.day} 在线';
   }
+}
+
+class _SwipeConversationTile extends StatefulWidget {
+  const _SwipeConversationTile({
+    required this.deviceId,
+    required this.confirmDelete,
+    required this.deleteConversation,
+    required this.child,
+  });
+
+  final String deviceId;
+  final Future<bool?> Function() confirmDelete;
+  final ValueChanged<String> deleteConversation;
+  final Widget child;
+
+  @override
+  State<_SwipeConversationTile> createState() => _SwipeConversationTileState();
+}
+
+class _SwipeConversationTileState extends State<_SwipeConversationTile> {
+  static const _actionWidth = 88.0;
+  double _offset = 0;
+
+  void _handleDragUpdate(DragUpdateDetails details) {
+    setState(() {
+      _offset = (_offset + details.delta.dx).clamp(-_actionWidth, 0.0);
+    });
+  }
+
+  void _handleDragEnd(DragEndDetails details) {
+    final shouldReveal = _offset.abs() > _actionWidth / 2 ||
+        details.velocity.pixelsPerSecond.dx < -450;
+    setState(() => _offset = shouldReveal ? -_actionWidth : 0);
+  }
+
+  Future<void> _delete() async {
+    if (await widget.confirmDelete() != true || !mounted) return;
+    widget.deleteConversation(widget.deviceId);
+  }
+
+  @override
+  Widget build(BuildContext context) => ClipRect(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: SizedBox(
+                  width: _actionWidth,
+                  child: Material(
+                    color: Theme.of(context).colorScheme.error,
+                    child: InkWell(
+                      onTap: _delete,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.delete_outline,
+                              color: Theme.of(context).colorScheme.onError),
+                          const SizedBox(height: 2),
+                          Text('删除',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color:
+                                      Theme.of(context).colorScheme.onError)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            AnimatedSlide(
+              offset: Offset(_offset / _actionWidth, 0),
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOut,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragUpdate: _handleDragUpdate,
+                onHorizontalDragEnd: _handleDragEnd,
+                child: widget.child,
+              ),
+            ),
+          ],
+        ),
+      );
 }
 
 class _PhoneConnectCard extends StatelessWidget {

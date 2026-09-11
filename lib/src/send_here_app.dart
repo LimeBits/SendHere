@@ -80,21 +80,42 @@ Future<void> _showImageActions(
 }) async {
   if (Platform.isMacOS) {
     final anchor = position ?? Offset.zero;
-    final menuPosition = RelativeRect.fromRect(
-      Rect.fromLTWH(anchor.dx, anchor.dy, 1, 1),
-      Offset.zero & MediaQuery.sizeOf(context),
+    final menuPosition = RelativeRect.fromLTRB(
+      anchor.dx,
+      anchor.dy,
+      MediaQuery.sizeOf(context).width - anchor.dx,
+      MediaQuery.sizeOf(context).height - anchor.dy,
     );
     final action = await showMenu<String>(
       context: context,
       position: menuPosition,
-      items: const [PopupMenuItem(value: 'save', child: Text('下载到本地'))],
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      menuPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+      items: const [
+        _RoundedMenuItem(value: 'save', child: Text('下载到本地')),
+      ],
     );
     if (action == 'save' && context.mounted) {
       await _saveImageToDevice(context, filePath, fileName);
     }
     return;
   }
-  await _saveImageToDevice(context, filePath, fileName);
+  final action = await showModalBottomSheet<String>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: ListTile(
+          leading: const Icon(Icons.download_outlined),
+          title: const Text('保存图片'),
+          onTap: () => Navigator.of(sheetContext).pop('save'),
+        ),
+      ),
+    ),
+  );
+  if (action == 'save' && context.mounted) {
+    await _saveImageToDevice(context, filePath, fileName);
+  }
 }
 
 Future<void> _showImagePreview(
@@ -527,6 +548,13 @@ class _SendHereHomeState extends State<SendHereHome>
       await _nearby.start(port: server.port);
       _nearbySubscription = _nearby.devices.listen(_syncNearbyDevices);
       final addresses = await server.localAddresses();
+      final localDeviceId = _nearby.deviceId;
+      if (addresses.isNotEmpty && localDeviceId != null) {
+        server.setLocalEndpoint(
+          address: addresses.first,
+          deviceId: localDeviceId,
+        );
+      }
       if (mounted) {
         setState(() {
           _server = server;
@@ -1996,20 +2024,23 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         .toList()
         .reversed
         .toList();
-    return GestureDetector(
+    return Listener(
       behavior: HitTestBehavior.translucent,
-      onHorizontalDragStart: (details) {
-        _startedAtLeadingEdge = details.globalPosition.dx <= 28;
+      onPointerDown: (event) {
+        _startedAtLeadingEdge = event.position.dx <= 28;
+        if (_startedAtLeadingEdge) _backDragOffset = 0;
       },
-      onHorizontalDragUpdate: (details) {
+      onPointerMove: (event) {
         if (!_startedAtLeadingEdge || widget.onMobileBack == null) return;
+        final delta = event.delta.dx;
+        if (delta <= 0 && _backDragOffset == 0) return;
         setState(() {
-          _backDragOffset = (_backDragOffset + details.delta.dx).clamp(0, 420);
+          _backDragOffset = (_backDragOffset + delta).clamp(0, 420);
         });
       },
-      onHorizontalDragEnd: (details) {
+      onPointerUp: (event) {
         final shouldGoBack = _startedAtLeadingEdge &&
-            (_backDragOffset > 96 || (details.primaryVelocity ?? 0) > 250) &&
+            _backDragOffset > 72 &&
             widget.onMobileBack != null;
         _startedAtLeadingEdge = false;
         if (shouldGoBack) {
@@ -2018,7 +2049,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
           setState(() => _backDragOffset = 0);
         }
       },
-      onHorizontalDragCancel: () {
+      onPointerCancel: (event) {
         _startedAtLeadingEdge = false;
         setState(() => _backDragOffset = 0);
       },

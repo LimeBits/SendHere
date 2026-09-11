@@ -34,6 +34,8 @@ class LocalTransferServer {
   final _peerSockets = <String, WebSocketChannel>{};
   final _peerSessions = <String, _PeerSession>{};
   final _peerEndpoints = <String, _PeerEndpoint>{};
+  String? _localAddress;
+  String? _localDeviceId;
 
   HttpServer? _server;
   String _token = _newToken();
@@ -347,6 +349,8 @@ class LocalTransferServer {
         'name': this.deviceName,
         'id': localDeviceId,
         'peer': true,
+        'address': _localAddress,
+        'port': port,
       }));
     } finally {
       client.close(force: true);
@@ -364,6 +368,14 @@ class LocalTransferServer {
       await socket.sink
           .close(WebSocketStatus.goingAway, 'Peer is no longer discoverable');
     }
+  }
+
+  void setLocalEndpoint({
+    required String address,
+    required String deviceId,
+  }) {
+    _localAddress = address;
+    _localDeviceId = deviceId;
   }
 
   void updatePeerEndpoint({
@@ -666,6 +678,21 @@ class LocalTransferServer {
           final peer = data['peer'] == true && identifiedId != null;
           _clients[socket] = identifiedName;
           if (identifiedId != null) _clientIds[socket] = identifiedId;
+          final peerAddress = data['address'] as String?;
+          final peerPort = data['port'] as int?;
+          if (peer &&
+              peerAddress != null &&
+              peerAddress.isNotEmpty &&
+              peerPort != null) {
+            _peerEndpoints[identifiedId] = _PeerEndpoint(
+              deviceId: identifiedId,
+              deviceName: identifiedName,
+              address: peerAddress,
+              port: peerPort,
+              localDeviceId: _localDeviceId ?? '',
+            );
+            unawaited(_ensurePeerUploadSession(identifiedId));
+          }
           if (peer) {
             final existingSocket = _peerSockets[identifiedId];
             if (existingSocket != null && existingSocket != socket) {

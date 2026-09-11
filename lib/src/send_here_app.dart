@@ -721,6 +721,27 @@ class _SendHereHomeState extends State<SendHereHome>
     setState(() => _showMobileConversation = true);
   }
 
+  Future<void> _deleteConversation(String deviceId) async {
+    final removedOutboxItems = await _outbox.removeForDevice(deviceId);
+    for (final item in removedOutboxItems) {
+      if (item.isFile && item.filePath != null) {
+        await _deleteArchivedFile(item.filePath!);
+      }
+    }
+    await _server?.disconnectPeer(deviceId);
+    if (!mounted) return;
+    setState(() {
+      _connectedPeers.remove(deviceId);
+      _events.removeWhere((event) => event.deviceId == deviceId);
+      _drafts.remove(deviceId);
+      _pendingItems.remove(deviceId);
+      _connectingPeerIds.remove(deviceId);
+      if (_selectedPeerId == deviceId) _selectedPeerId = null;
+      if (_showMobileConversation) _showMobileConversation = false;
+    });
+    await _saveRecentDevices();
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -754,11 +775,17 @@ class _SendHereHomeState extends State<SendHereHome>
               )
             : null,
         title: mobile
-            ? Text(_showMobileConversation
-                ? (_selectedPeerId == null
-                    ? '消息'
-                    : _connectedPeers[_selectedPeerId]?.name ?? '消息')
-                : '设备')
+            ? Text(
+                _showMobileConversation
+                    ? (_selectedPeerId == null
+                        ? '消息'
+                        : _connectedPeers[_selectedPeerId]?.name ?? '消息')
+                    : 'SendHere',
+                style: _showMobileConversation
+                    ? null
+                    : const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w700),
+              )
             : null,
       ),
       body: Padding(
@@ -778,6 +805,7 @@ class _SendHereHomeState extends State<SendHereHome>
                       showPhoneConnection: !mobile,
                       phoneQrExpanded: _phoneQrExpanded,
                       hidePhoneQr: _hidePhoneConnectPanel,
+                      deleteConversation: _deleteConversation,
                     );
                     final conversation = _ConversationPanel(
                       controller: _textController,
@@ -877,6 +905,7 @@ class _DeviceSidebar extends StatelessWidget {
     required this.showPhoneConnection,
     required this.phoneQrExpanded,
     required this.hidePhoneQr,
+    required this.deleteConversation,
   });
 
   final String url;
@@ -887,6 +916,7 @@ class _DeviceSidebar extends StatelessWidget {
   final bool showPhoneConnection;
   final bool phoneQrExpanded;
   final VoidCallback hidePhoneQr;
+  final ValueChanged<String> deleteConversation;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -917,7 +947,8 @@ class _DeviceSidebar extends StatelessWidget {
                         .map((device) => _DeviceTile(
                             device: device,
                             selected: selectedPeerId == device.id,
-                            select: selectPeer))
+                            select: selectPeer,
+                            deleteConversation: deleteConversation))
                         .toList(),
                   ),
           ),
@@ -947,16 +978,18 @@ class _DeviceTile extends StatelessWidget {
     required this.device,
     required this.selected,
     required this.select,
+    required this.deleteConversation,
   });
 
   final _PeerDevice device;
   final bool selected;
   final ValueChanged<String> select;
+  final ValueChanged<String> deleteConversation;
 
   @override
   Widget build(BuildContext context) {
     final phone = device.name.contains('手机') || device.name.contains('iPhone');
-    return ListTile(
+    final tile = ListTile(
       selected: selected,
       selectedTileColor: Theme.of(context).colorScheme.secondaryContainer,
       leading: CircleAvatar(
@@ -978,6 +1011,69 @@ class _DeviceTile extends StatelessWidget {
           : const Icon(Icons.cloud_off_outlined),
       onTap: () => select(device.id),
     );
+    if (Platform.isIOS || Platform.isAndroid) {
+      return Dismissible(
+        key: ValueKey(device.id),
+        direction: DismissDirection.endToStart,
+        confirmDismiss: (_) => _confirmDelete(context),
+        onDismissed: (_) => deleteConversation(device.id),
+        background: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 24),
+          color: Theme.of(context).colorScheme.error,
+          child: Icon(Icons.delete_outline,
+              color: Theme.of(context).colorScheme.onError),
+        ),
+        child: tile,
+      );
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onSecondaryTapDown: (details) => _showDesktopMenu(context, details),
+      child: tile,
+    );
+  }
+
+  Future<bool?> _confirmDelete(BuildContext context) => showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('删除会话？'),
+          content: Text(
+              '删除与“${device.name}”的本机聊天记录和待发送内容。\n\n已接收的文件不会被删除；设备再次被发现时仍会显示。'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('删除')),
+          ],
+        ),
+      );
+
+  Future<void> _showDesktopMenu(
+    BuildContext context,
+    TapDownDetails details,
+  ) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final value = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(
+            details.globalPosition.dx, details.globalPosition.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem(value: 'open', child: Text('打开会话')),
+        PopupMenuItem(value: 'delete', child: Text('删除会话')),
+      ],
+    );
+    if (!context.mounted) return;
+    if (value == 'open') {
+      select(device.id);
+    } else if (value == 'delete' && await _confirmDelete(context) == true) {
+      if (context.mounted) deleteConversation(device.id);
+    }
   }
 
   String _lastSeenLabel(BuildContext context, DateTime time) {

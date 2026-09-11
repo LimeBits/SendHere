@@ -104,6 +104,13 @@ class Outbox {
     await _save();
   }
 
+  Future<List<OutboxItem>> removeForDevice(String deviceId) async {
+    final removed = _items.where((item) => item.deviceId == deviceId).toList();
+    _items.removeWhere((item) => item.deviceId == deviceId);
+    await _save();
+    return removed;
+  }
+
   Future<void> updateStatus(String id, FileTransferStatus status) async {
     final index = _items.indexWhere((item) => item.id == id);
     if (index >= 0) {

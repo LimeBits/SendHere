@@ -77,6 +77,11 @@ class NativeTextFieldState extends State<NativeTextField> {
     await _channel?.invokeMethod<void>('focus');
   }
 
+  Future<void> unfocus() async {
+    _mobileFocusNode.unfocus();
+    await _channel?.invokeMethod<void>('unfocus');
+  }
+
   Future<void> _setCompose() =>
       _channel?.invokeMethod<void>(
         'setCompose',

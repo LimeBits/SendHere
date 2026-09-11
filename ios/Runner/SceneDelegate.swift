@@ -46,6 +46,17 @@ class SceneDelegate: FlutterSceneDelegate {
           title: arguments?["title"] as? String ?? "SendHere",
           body: arguments?["body"] as? String ?? "你收到了新消息")
         result(nil)
+      case "getPermission":
+        self?.notificationPermissionStatus { result($0) }
+      case "requestPermission":
+        self?.requestNotificationPermission { result($0) }
+      case "openSettings":
+        guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
+          result(FlutterError(code: "settings_unavailable", message: "无法打开系统设置", details: nil))
+          return
+        }
+        UIApplication.shared.open(settingsURL)
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -77,6 +88,38 @@ class SceneDelegate: FlutterSceneDelegate {
     }
   }
 
+  private func notificationPermissionStatus(completion: @escaping (String) -> Void) {
+    UNUserNotificationCenter.current().getNotificationSettings { settings in
+      completion(Self.permissionLabel(settings.authorizationStatus))
+    }
+  }
+
+  private func requestNotificationPermission(completion: @escaping (String) -> Void) {
+    notificationAuthorizationRequested = true
+    UNUserNotificationCenter.current().requestAuthorization(
+      options: [.alert, .badge, .sound]
+    ) { _, _ in
+      self.notificationPermissionStatus(completion: completion)
+    }
+  }
+
+  private static func permissionLabel(_ status: UNAuthorizationStatus) -> String {
+    switch status {
+    case .authorized:
+      return "authorized"
+    case .provisional:
+      return "provisional"
+    case .denied:
+      return "denied"
+    case .ephemeral:
+      return "ephemeral"
+    case .notDetermined:
+      return "notDetermined"
+    @unknown default:
+      return "notDetermined"
+    }
+  }
+
   private func showNotification(title: String, body: String) {
     let scheduleNotification = {
       let content = UNMutableNotificationContent()
@@ -94,11 +137,10 @@ class SceneDelegate: FlutterSceneDelegate {
       scheduleNotification()
       return
     }
-    notificationAuthorizationRequested = true
-    UNUserNotificationCenter.current().requestAuthorization(
-      options: [.alert, .badge, .sound]
-    ) { granted, _ in
-      if granted { scheduleNotification() }
+    requestNotificationPermission { permission in
+      if permission == "authorized" || permission == "provisional" {
+        scheduleNotification()
+      }
     }
   }
 }

@@ -202,11 +202,13 @@ class _SendHereHomeState extends State<SendHereHome>
   bool _restartingForForeground = false;
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
   final _unreadCounts = <String, int>{};
+  String? _notificationPermission;
 
   int get _unreadCount =>
       _unreadCounts.values.fold(0, (total, count) => total + count);
 
   static const _recentDevicesKey = 'sendhere-recent-devices';
+  static const _unreadCountsKey = 'sendhere-unread-counts';
   static const _conversationDropChannel =
       MethodChannel('sendhere/conversation_drop');
 
@@ -222,24 +224,50 @@ class _SendHereHomeState extends State<SendHereHome>
         await _addFilesToPending(paths);
       }
     });
-    _loadInitialState().whenComplete(_startServer);
+    _loadInitialState().whenComplete(() async {
+      await _updateNotificationBadge();
+      await _refreshNotificationPermission(request: true);
+      await _startServer();
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycleState = state;
     if (state == AppLifecycleState.resumed) {
-      _markAllVisibleMessagesRead();
       if (Platform.isIOS || Platform.isAndroid) {
+        unawaited(_refreshNotificationPermission());
         unawaited(_restartAfterForeground());
       }
     }
   }
 
-  void _markAllVisibleMessagesRead() {
-    if (_unreadCounts.isEmpty) return;
-    setState(_unreadCounts.clear);
-    unawaited(_updateNotificationBadge());
+  Future<void> _saveUnreadCounts() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(_unreadCountsKey, jsonEncode(_unreadCounts));
+  }
+
+  Future<void> _refreshNotificationPermission({bool request = false}) async {
+    if (!Platform.isIOS) return;
+    try {
+      final permission = await _notificationChannel.invokeMethod<String>(
+        request ? 'requestPermission' : 'getPermission',
+      );
+      if (mounted && permission != null) {
+        setState(() => _notificationPermission = permission);
+      }
+    } on PlatformException {
+      // Notification permissions are optional for local network transfers.
+    }
+  }
+
+  Future<void> _openNotificationSettings() async {
+    if (!Platform.isIOS) return;
+    try {
+      await _notificationChannel.invokeMethod<void>('openSettings');
+    } on PlatformException {
+      // Nothing else can be done if iOS declines to open Settings.
+    }
   }
 
   Future<void> _updateNotificationBadge() async {
@@ -277,6 +305,7 @@ class _SendHereHomeState extends State<SendHereHome>
         _unreadCounts.update(deviceId, (count) => count + 1, ifAbsent: () => 1);
       });
     }
+    unawaited(_saveUnreadCounts());
     await _updateNotificationBadge();
     if (macOSWindowInactive ||
         (_lifecycleState != AppLifecycleState.resumed && Platform.isIOS)) {
@@ -310,6 +339,17 @@ class _SendHereHomeState extends State<SendHereHome>
     await _outbox.load();
     _events.addAll(_outbox.items.map(_eventForOutbox));
     await _loadRecentDevices();
+    final preferences = await SharedPreferences.getInstance();
+    final rawUnreadCounts = preferences.getString(_unreadCountsKey);
+    if (rawUnreadCounts == null) return;
+    try {
+      final decoded = jsonDecode(rawUnreadCounts) as Map<String, dynamic>;
+      _unreadCounts.addAll(decoded.map(
+        (deviceId, count) => MapEntry(deviceId, (count as num).toInt()),
+      ));
+    } catch (_) {
+      // A malformed unread cache must never prevent SendHere from starting.
+    }
   }
 
   Future<void> _loadRecentDevices() async {
@@ -552,9 +592,14 @@ class _SendHereHomeState extends State<SendHereHome>
         if (source == null) return;
         if (source == _AttachmentSource.photos) {
           final photos = await ImagePicker().pickMultiImage();
-          await _addFilesToPending(photos.map((file) => file.path).toList());
+          await _sendSelectedMobileFiles(
+            photos.map((file) => file.path).toList(),
+          );
           return;
         }
+        final files = await openFiles();
+        await _sendSelectedMobileFiles(files.map((file) => file.path).toList());
+        return;
       }
       final files = await openFiles();
       await _addFilesToPending(files.map((file) => file.path).toList());
@@ -564,6 +609,12 @@ class _SendHereHomeState extends State<SendHereHome>
             .showSnackBar(SnackBar(content: Text('无法添加文件：$error')));
       }
     }
+  }
+
+  Future<void> _sendSelectedMobileFiles(List<String> paths) async {
+    if (paths.isEmpty) return;
+    await _addFilesToPending(paths);
+    await _sendPending();
   }
 
   Future<void> _addFilesToPending(List<String> paths) async {
@@ -798,6 +849,7 @@ class _SendHereHomeState extends State<SendHereHome>
 
   Future<void> _selectPeer(String id) async {
     if (_unreadCounts.remove(id) != null) {
+      unawaited(_saveUnreadCounts());
       unawaited(_updateNotificationBadge());
     }
     final previousId = _selectedPeerId;
@@ -829,6 +881,7 @@ class _SendHereHomeState extends State<SendHereHome>
 
   Future<void> _deleteConversation(String deviceId) async {
     if (_unreadCounts.remove(deviceId) != null) {
+      unawaited(_saveUnreadCounts());
       unawaited(_updateNotificationBadge());
     }
     final removedOutboxItems = await _outbox.removeForDevice(deviceId);
@@ -891,7 +944,7 @@ class _SendHereHomeState extends State<SendHereHome>
                         : _connectedPeers[_selectedPeerId]?.name ?? '消息')
                     : 'SendHere',
                 style: _showMobileConversation
-                    ? null
+                    ? const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)
                     : const TextStyle(
                         fontSize: 18, fontWeight: FontWeight.w700),
               )
@@ -916,6 +969,10 @@ class _SendHereHomeState extends State<SendHereHome>
                       phoneQrExpanded: _phoneQrExpanded,
                       hidePhoneQr: _hidePhoneConnectPanel,
                       deleteConversation: _deleteConversation,
+                      notificationPermission: _notificationPermission,
+                      requestNotificationPermission: () =>
+                          _refreshNotificationPermission(request: true),
+                      openNotificationSettings: _openNotificationSettings,
                     );
                     final conversation = _ConversationPanel(
                       controller: _textController,
@@ -944,6 +1001,10 @@ class _SendHereHomeState extends State<SendHereHome>
                         final id = _selectedPeerId;
                         if (id != null) _drafts[id] = value;
                       },
+                      onMobileBack: mobile
+                          ? () =>
+                              setState(() => _showMobileConversation = false)
+                          : null,
                     );
                     if (mobile) {
                       return _showMobileConversation ? conversation : sidebar;
@@ -1019,6 +1080,9 @@ class _DeviceSidebar extends StatefulWidget {
     required this.phoneQrExpanded,
     required this.hidePhoneQr,
     required this.deleteConversation,
+    required this.notificationPermission,
+    required this.requestNotificationPermission,
+    required this.openNotificationSettings,
   });
 
   final String url;
@@ -1031,6 +1095,9 @@ class _DeviceSidebar extends StatefulWidget {
   final bool phoneQrExpanded;
   final VoidCallback hidePhoneQr;
   final ValueChanged<String> deleteConversation;
+  final String? notificationPermission;
+  final VoidCallback requestNotificationPermission;
+  final VoidCallback openNotificationSettings;
 
   @override
   State<_DeviceSidebar> createState() => _DeviceSidebarState();
@@ -1066,6 +1133,15 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
             child: Text('设备列表',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
           ),
+          if (mobile &&
+              widget.notificationPermission != null &&
+              widget.notificationPermission != 'authorized' &&
+              widget.notificationPermission != 'provisional')
+            _NotificationPermissionBanner(
+              permission: widget.notificationPermission!,
+              requestPermission: widget.requestNotificationPermission,
+              openSettings: widget.openNotificationSettings,
+            ),
           Expanded(
             child: widget.connectedPeers.isEmpty
                 ? const Center(
@@ -1126,6 +1202,45 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
             ),
           ],
         ]),
+      ),
+    );
+  }
+}
+
+class _NotificationPermissionBanner extends StatelessWidget {
+  const _NotificationPermissionBanner({
+    required this.permission,
+    required this.requestPermission,
+    required this.openSettings,
+  });
+
+  final String permission;
+  final VoidCallback requestPermission;
+  final VoidCallback openSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final denied = permission == 'denied';
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+        child: Row(
+          children: [
+            const Icon(Icons.notifications_off_outlined, size: 19),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                denied ? '通知已关闭，后台短暂可接收的消息不会显示提醒。' : '开启通知，以便收到局域网消息时显示提醒。',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            TextButton(
+              onPressed: denied ? openSettings : requestPermission,
+              child: Text(denied ? '去设置' : '开启'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1579,6 +1694,7 @@ class _ConversationPanel extends StatefulWidget {
     required this.online,
     required this.draft,
     required this.onDraftChanged,
+    this.onMobileBack,
   });
 
   final TextEditingController controller;
@@ -1596,6 +1712,7 @@ class _ConversationPanel extends StatefulWidget {
   final bool online;
   final String draft;
   final ValueChanged<String> onDraftChanged;
+  final VoidCallback? onMobileBack;
 
   @override
   State<_ConversationPanel> createState() => _ConversationPanelState();
@@ -1608,6 +1725,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   final _nativeFieldKey = GlobalKey<NativeTextFieldState>();
   final _scrollController = ScrollController();
   double _composeHeight = _minimumComposeHeight;
+  bool _startedAtLeadingEdge = false;
 
   @override
   void didUpdateWidget(covariant _ConversationPanel oldWidget) {
@@ -1631,6 +1749,11 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _dismissKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    _nativeFieldKey.currentState?.unfocus();
   }
 
   void _focusInput() {
@@ -1677,88 +1800,106 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         .toList()
         .reversed
         .toList();
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Expanded(
-          child: messages.isEmpty
-              ? Center(
-                  child: Text(widget.online ? '还没有消息，开始发送吧。' : '该设备暂时不可用'),
-                )
-              : ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.all(18),
-                  itemCount: messages.length,
-                  itemBuilder: (_, index) => _MessageBubble(
-                    event: messages[index],
-                    cancelOutboxItem: widget.cancelOutboxItem,
-                  ),
-                ),
-        ),
-        const Divider(height: 1),
-        Container(
-          margin: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.black26),
-          ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-              child: NativeTextField(
-                key: _nativeFieldKey,
-                initialText: widget.draft,
-                composeItems: widget.pendingItems
-                    .map((item) => item.isFile
-                        ? NativeComposeItem.file(
-                            item.path!, path.basename(item.path!))
-                        : NativeComposeItem.text(item.text!))
-                    .toList(),
-                height: _composeHeight,
-                onContentHeightChanged: (contentHeight) {
-                  final nextHeight = contentHeight.clamp(
-                    _minimumComposeHeight,
-                    _maximumComposeHeight,
-                  );
-                  if ((nextHeight - _composeHeight).abs() > 0.5) {
-                    setState(() => _composeHeight = nextHeight);
-                  }
-                },
-                onFilesDropped: (paths) {
-                  widget.addDroppedFiles(paths);
-                  _focusInput();
-                },
-                onComposeChanged: widget.replacePendingCompose,
-                onChanged: (value) {
-                  widget.controller.text = value;
-                  widget.onDraftChanged(value);
-                },
-                onSubmitted: _submit,
-              ),
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragStart: (details) {
+        _startedAtLeadingEdge = details.globalPosition.dx <= 28;
+      },
+      onHorizontalDragEnd: (details) {
+        final shouldGoBack = _startedAtLeadingEdge &&
+            (details.primaryVelocity ?? 0) > 250 &&
+            widget.onMobileBack != null;
+        _startedAtLeadingEdge = false;
+        if (shouldGoBack) widget.onMobileBack!();
+      },
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => _dismissKeyboard(),
+              child: messages.isEmpty
+                  ? Center(
+                      child: Text(widget.online ? '还没有消息，开始发送吧。' : '该设备暂时不可用'),
+                    )
+                  : ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(18),
+                      itemCount: messages.length,
+                      itemBuilder: (_, index) => _MessageBubble(
+                        event: messages[index],
+                        cancelOutboxItem: widget.cancelOutboxItem,
+                      ),
+                    ),
             ),
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(6, 0, 8, 4),
-              child: Row(children: [
-                IconButton(
-                  tooltip: '发送文件',
-                  onPressed: () async {
-                    await widget.offerFiles();
+          ),
+          const Divider(height: 1),
+          Container(
+            margin: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.black26),
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                child: NativeTextField(
+                  key: _nativeFieldKey,
+                  initialText: widget.draft,
+                  composeItems: widget.pendingItems
+                      .map((item) => item.isFile
+                          ? NativeComposeItem.file(
+                              item.path!, path.basename(item.path!))
+                          : NativeComposeItem.text(item.text!))
+                      .toList(),
+                  height: _composeHeight,
+                  onContentHeightChanged: (contentHeight) {
+                    final nextHeight = contentHeight.clamp(
+                      _minimumComposeHeight,
+                      _maximumComposeHeight,
+                    );
+                    if ((nextHeight - _composeHeight).abs() > 0.5) {
+                      setState(() => _composeHeight = nextHeight);
+                    }
+                  },
+                  onFilesDropped: (paths) {
+                    widget.addDroppedFiles(paths);
                     _focusInput();
                   },
-                  icon: const Icon(Icons.attach_file),
+                  onComposeChanged: widget.replacePendingCompose,
+                  onChanged: (value) {
+                    widget.controller.text = value;
+                    widget.onDraftChanged(value);
+                  },
+                  onSubmitted: _submit,
                 ),
-                const Spacer(),
-                FilledButton.icon(
-                    onPressed: () => _submit(widget.controller.text),
-                    icon: const Icon(Icons.send),
-                    label: const Text('发送')),
-              ]),
-            ),
-          ]),
-        ),
-      ]),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 0, 8, 4),
+                child: Row(children: [
+                  IconButton(
+                    tooltip: '发送文件',
+                    onPressed: () async {
+                      await widget.offerFiles();
+                      _focusInput();
+                    },
+                    icon: const Icon(Icons.attach_file),
+                  ),
+                  const Spacer(),
+                  FilledButton.icon(
+                      onPressed: () => _submit(widget.controller.text),
+                      icon: const Icon(Icons.send),
+                      label: const Text('发送')),
+                ]),
+              ),
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 }

@@ -475,6 +475,11 @@ class _SendHereHomeState extends State<SendHereHome>
           _address = addresses.isEmpty ? null : addresses.first;
           _error = null;
         });
+        if (addresses.isEmpty && (Platform.isIOS || Platform.isAndroid)) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未检测到 Wi‑Fi 局域网地址，暂时无法生成连接二维码')),
+          );
+        }
       }
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
@@ -724,8 +729,15 @@ class _SendHereHomeState extends State<SendHereHome>
 
   Future<OutboxItem> _outboxFileItem(String id, String deviceId,
       String deviceName, String sourcePath, Directory outboxDirectory) async {
-    final archived =
-        await _outbox.archiveFile(File(sourcePath), outboxDirectory);
+    final source = File(sourcePath);
+    if (!await source.exists()) {
+      throw StateError('所选照片已无法读取，请重新选择');
+    }
+    final archived = await _outbox.archiveFile(source, outboxDirectory);
+    if (await archived.length() == 0) {
+      await _deleteArchivedFile(archived.path);
+      throw StateError('所选照片为空，无法发送');
+    }
     return OutboxItem(
       id: id,
       deviceId: deviceId,
@@ -762,8 +774,12 @@ class _SendHereHomeState extends State<SendHereHome>
     }
     _sendingOutboxDeviceIds.add(deviceId);
     try {
+      // Failed transfers stay visible for the user to retry or cancel, but must
+      // not prevent a newly selected photo/file from being delivered.
       final items = _outbox.items
-          .where((item) => item.deviceId == deviceId)
+          .where((item) =>
+              item.deviceId == deviceId &&
+              item.status != FileTransferStatus.failed)
           .toList()
         ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
       for (final item in items) {
@@ -837,6 +853,19 @@ class _SendHereHomeState extends State<SendHereHome>
     });
   }
 
+  Future<void> _retryOutboxItem(String transferId) async {
+    OutboxItem? item;
+    for (final candidate in _outbox.items) {
+      if (candidate.id == transferId) {
+        item = candidate;
+        break;
+      }
+    }
+    if (item == null || item.status == FileTransferStatus.uploading) return;
+    await _setOutboxStatus(item, FileTransferStatus.waiting);
+    unawaited(_deliverOutbox(item.deviceId));
+  }
+
   Future<void> _cancelOutboxItem(String transferId) async {
     OutboxItem? item;
     for (final candidate in _outbox.items) {
@@ -892,7 +921,12 @@ class _SendHereHomeState extends State<SendHereHome>
   Future<void> _showMobileConnectQr() async {
     final server = _server;
     final address = _address;
-    if (server == null || address == null) return;
+    if (server == null || address == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先连接 Wi‑Fi，才能生成局域网连接二维码')),
+      );
+      return;
+    }
     server.refreshToken(disconnectExisting: false);
     final url = 'http://$address:${server.port}/?token=${server.token}';
     await showModalBottomSheet<void>(
@@ -1064,6 +1098,7 @@ class _SendHereHomeState extends State<SendHereHome>
                       addDroppedFiles: _addFilesToPending,
                       replacePendingCompose: _replacePendingCompose,
                       cancelOutboxItem: _cancelOutboxItem,
+                      retryOutboxItem: _retryOutboxItem,
                       selectedPeerId: _selectedPeerId,
                       selectedPeerName: _selectedPeerId == null
                           ? null
@@ -1797,6 +1832,7 @@ class _ConversationPanel extends StatefulWidget {
     required this.addDroppedFiles,
     required this.replacePendingCompose,
     required this.cancelOutboxItem,
+    required this.retryOutboxItem,
     required this.selectedPeerId,
     required this.selectedPeerName,
     required this.online,
@@ -1815,6 +1851,7 @@ class _ConversationPanel extends StatefulWidget {
   final ValueChanged<List<String>> addDroppedFiles;
   final ValueChanged<List<NativeComposeItem>> replacePendingCompose;
   final ValueChanged<String> cancelOutboxItem;
+  final ValueChanged<String> retryOutboxItem;
   final String? selectedPeerId;
   final String? selectedPeerName;
   final bool online;
@@ -1957,6 +1994,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                         itemBuilder: (_, index) => _MessageBubble(
                           event: messages[index],
                           cancelOutboxItem: widget.cancelOutboxItem,
+                          retryOutboxItem: widget.retryOutboxItem,
                         ),
                       ),
               ),
@@ -2032,9 +2070,14 @@ class _ConversationPanelState extends State<_ConversationPanel> {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.event, required this.cancelOutboxItem});
+  const _MessageBubble({
+    required this.event,
+    required this.cancelOutboxItem,
+    required this.retryOutboxItem,
+  });
   final TransferEvent event;
   final ValueChanged<String> cancelOutboxItem;
+  final ValueChanged<String> retryOutboxItem;
 
   @override
   Widget build(BuildContext context) {
@@ -2098,6 +2141,9 @@ class _MessageBubble extends StatelessWidget {
                           const SizedBox(height: 10),
                           _TransferProgress(
                             event: event,
+                            retry: event.fileStatus == FileTransferStatus.failed
+                                ? () => retryOutboxItem(event.transferId!)
+                                : null,
                             cancel: event.fileStatus ==
                                         FileTransferStatus.waiting ||
                                     event.fileStatus ==
@@ -2154,8 +2200,9 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _TransferProgress extends StatelessWidget {
-  const _TransferProgress({required this.event, this.cancel});
+  const _TransferProgress({required this.event, this.retry, this.cancel});
   final TransferEvent event;
+  final VoidCallback? retry;
   final VoidCallback? cancel;
 
   @override
@@ -2198,6 +2245,20 @@ class _TransferProgress extends StatelessWidget {
                   Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
             ),
           ),
+          if (retry != null) ...[
+            TextButton(
+              onPressed: retry,
+              style: const ButtonStyle(
+                overlayColor: WidgetStatePropertyAll(Colors.transparent),
+                minimumSize: WidgetStatePropertyAll(Size(0, 22)),
+                padding: WidgetStatePropertyAll(EdgeInsets.zero),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity(horizontal: -4, vertical: -4),
+              ),
+              child: const Text('重新发送', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+          if (retry != null && cancel != null) const SizedBox(width: 8),
           if (cancel != null) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 7),

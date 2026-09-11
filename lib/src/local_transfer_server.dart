@@ -110,16 +110,39 @@ class LocalTransferServer {
     _clients.clear();
   }
 
+  /// Returns private IPv4 addresses, preferring a physical Wi-Fi/Ethernet
+  /// interface over cellular or VPN interfaces. A QR link must be reachable by
+  /// another device on the same local network, so advertising a VPN or cellular
+  /// address would create a valid-looking but unusable code.
   Future<List<String>> localAddresses() async {
-    final addresses = <String>[];
+    final preferred = <String>[];
     for (final interface in await NetworkInterface.list()) {
+      final name = interface.name.toLowerCase();
+      final physical = name.startsWith('en') ||
+          name.contains('wifi') ||
+          name.contains('ethernet');
       for (final address in interface.addresses) {
-        if (address.type == InternetAddressType.IPv4 && !address.isLoopback) {
-          addresses.add(address.address);
+        if (address.type != InternetAddressType.IPv4 ||
+            address.isLoopback ||
+            !_isPrivateIpv4(address.address)) {
+          continue;
         }
+        if (physical) preferred.add(address.address);
       }
     }
-    return addresses;
+    return preferred.toSet().toList();
+  }
+
+  static bool _isPrivateIpv4(String value) {
+    final octets = value.split('.');
+    if (octets.length != 4) return false;
+    final numbers = octets.map(int.tryParse).toList();
+    if (numbers.any((number) => number == null)) return false;
+    final first = numbers[0]!;
+    final second = numbers[1]!;
+    return first == 10 ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168);
   }
 
   bool _isAuthorized(Request request) {
@@ -473,14 +496,14 @@ class LocalTransferServer {
     // this process. Wait briefly so choosing a file immediately after a device
     // appears does not fail solely because the upload session is not ready.
     _PeerSession? session;
-    for (var attempt = 0; attempt < 4 && session == null; attempt++) {
+    for (var attempt = 0; attempt < 12 && session == null; attempt++) {
       session = await _ensurePeerUploadSession(deviceId);
-      if (session == null && attempt < 3) {
+      if (session == null && attempt < 11) {
         await Future<void>.delayed(const Duration(milliseconds: 350));
       }
     }
     if (session == null) {
-      throw StateError('设备连接尚未准备好文件传输，请稍后重试');
+      throw StateError('设备连接尚未准备好文件传输，请确认对方 App 已打开后重试');
     }
     final uploadSession = session;
     final filename = fileName ?? path.basename(file.path);

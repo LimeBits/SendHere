@@ -39,6 +39,125 @@ Future<void> _openReceivedFile(BuildContext context, String filePath) async {
   }
 }
 
+Future<void> _showImagePreview(
+  BuildContext context,
+  String filePath,
+  String fileName,
+) {
+  return Navigator.of(context).push(
+    PageRouteBuilder<void>(
+      opaque: true,
+      transitionDuration: const Duration(milliseconds: 180),
+      reverseTransitionDuration: const Duration(milliseconds: 140),
+      pageBuilder: (_, animation, __) => FadeTransition(
+        opacity: animation,
+        child: _ImagePreviewPage(filePath: filePath, fileName: fileName),
+      ),
+    ),
+  );
+}
+
+class _ImagePreviewPage extends StatefulWidget {
+  const _ImagePreviewPage({required this.filePath, required this.fileName});
+
+  final String filePath;
+  final String fileName;
+
+  @override
+  State<_ImagePreviewPage> createState() => _ImagePreviewPageState();
+}
+
+class _ImagePreviewPageState extends State<_ImagePreviewPage> {
+  final _transformationController = TransformationController();
+  Offset? _dragStart;
+  int _activePointers = 0;
+  bool _closing = false;
+
+  bool get _mobile => Platform.isIOS || Platform.isAndroid;
+
+  void _close() {
+    if (_closing) return;
+    _closing = true;
+    Navigator.of(context).pop();
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    _activePointers++;
+    _dragStart = _activePointers == 1 ? event.position : null;
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (!_mobile || _activePointers != 1 || _dragStart == null) return;
+    if (_transformationController.value.getMaxScaleOnAxis() > 1.02) return;
+    final delta = event.position - _dragStart!;
+    if (delta.dy > 120 && delta.dy > delta.dx.abs() * 1.25) _close();
+  }
+
+  void _handlePointerEnd(PointerEvent event) {
+    if (_activePointers > 0) _activePointers--;
+    if (_activePointers == 0) _dragStart = null;
+  }
+
+  @override
+  void dispose() {
+    _transformationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _mobile ? _close : null,
+            child: Listener(
+              onPointerDown: _handlePointerDown,
+              onPointerMove: _handlePointerMove,
+              onPointerUp: _handlePointerEnd,
+              onPointerCancel: _handlePointerEnd,
+              child: InteractiveViewer(
+                transformationController: _transformationController,
+                minScale: 0.8,
+                maxScale: 5,
+                child: Center(
+                  child: Image.file(
+                    File(widget.filePath),
+                    width: double.infinity,
+                    height: double.infinity,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => Text(
+                      '无法显示 ${widget.fileName}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (!_mobile)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topRight,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: IconButton.filled(
+                    tooltip: '关闭',
+                    onPressed: _close,
+                    icon: const Icon(Icons.close),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class SendHereApp extends StatelessWidget {
   const SendHereApp({super.key});
 
@@ -1159,8 +1278,16 @@ class _MessageBubble extends StatelessWidget {
                         InkWell(
                           onTap: event.localPath == null
                               ? null
-                              : () =>
-                                  _openReceivedFile(context, event.localPath!),
+                              : image
+                                  ? () => _showImagePreview(
+                                        context,
+                                        event.localPath!,
+                                        event.fileName ?? '图片',
+                                      )
+                                  : () => _openReceivedFile(
+                                        context,
+                                        event.localPath!,
+                                      ),
                           child: image && event.localPath != null
                               ? ConstrainedBox(
                                   constraints:

@@ -30,6 +30,10 @@ Future<void> _openReceivedFile(BuildContext context, String filePath) async {
       await Process.run('open', ['-R', filePath]);
       return;
     }
+    if (Platform.isWindows) {
+      await Process.run('explorer.exe', ['/select,', filePath]);
+      return;
+    }
     if (Platform.isIOS || Platform.isAndroid) {
       await _mobileFileChannel.invokeMethod<void>('open', {'path': filePath});
     }
@@ -53,6 +57,10 @@ Future<void> _saveImageToDevice(
         'path': filePath,
         'name': fileName,
       });
+    } else if (Platform.isWindows) {
+      final destination = await getSaveLocation(suggestedName: fileName);
+      if (destination == null) return;
+      await File(filePath).copy(destination.path);
     } else {
       await _mobileFileChannel.invokeMethod<void>('saveImage', {
         'path': filePath,

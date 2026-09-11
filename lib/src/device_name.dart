@@ -8,7 +8,7 @@ class DeviceName {
   static const _channel = MethodChannel('sendhere/device_name');
 
   static Future<String> current() async {
-    if (Platform.isMacOS || Platform.isIOS) {
+    if (Platform.isMacOS || Platform.isIOS || Platform.isAndroid) {
       try {
         final name = await _channel.invokeMethod<String>('get');
         if (name != null && name.trim().isNotEmpty) return name.trim();
@@ -18,8 +18,9 @@ class DeviceName {
     }
 
     final hostname = Platform.localHostname.trim();
-    if (Platform.isIOS && (hostname.isEmpty || hostname == 'localhost')) {
-      return 'iPhone';
+    if (hostname.isEmpty || hostname == 'localhost') {
+      if (Platform.isIOS) return 'iPhone';
+      if (Platform.isAndroid) return 'Android 设备';
     }
     return hostname;
   }

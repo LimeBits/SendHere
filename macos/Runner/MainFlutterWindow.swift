@@ -44,6 +44,44 @@ private final class ConversationDropView: NSView {
   }
 }
 
+private final class DesktopImagePreviewController: NSObject {
+  static let shared = DesktopImagePreviewController()
+  private var window: NSWindow?
+
+  func show(path: String, name: String) throws {
+    guard let image = NSImage(contentsOfFile: path) else {
+      throw NSError(
+        domain: "SendHere.ImagePreview", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "无法读取图片文件"])
+    }
+    let screenFrame = (NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800))
+    let frame = NSRect(
+      x: screenFrame.midX - screenFrame.width * 0.45,
+      y: screenFrame.midY - screenFrame.height * 0.45,
+      width: screenFrame.width * 0.9,
+      height: screenFrame.height * 0.9)
+    let preview = NSWindow(
+      contentRect: frame,
+      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+      backing: .buffered,
+      defer: false)
+    preview.title = name
+    preview.isReleasedWhenClosed = false
+    preview.minSize = NSSize(width: 480, height: 360)
+
+    let imageView = NSImageView(frame: preview.contentView?.bounds ?? .zero)
+    imageView.image = image
+    imageView.imageScaling = .scaleProportionallyUpOrDown
+    imageView.imageAlignment = .alignCenter
+    imageView.autoresizingMask = [.width, .height]
+    preview.contentView = imageView
+    preview.center()
+    preview.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    window = preview
+  }
+}
+
 private final class ConversationContainerController: NSViewController {
   let flutterViewController: FlutterViewController
   let dropView = ConversationDropView()
@@ -74,6 +112,7 @@ private final class ConversationContainerController: NSViewController {
 class MainFlutterWindow: NSWindow {
   private var conversationDropChannel: FlutterMethodChannel?
   private var notificationChannel: FlutterMethodChannel?
+  private var imagePreviewChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -119,6 +158,24 @@ class MainFlutterWindow: NSWindow {
         result(StatusBarController.shared.shouldPresentIncomingNotification)
       default:
         result(FlutterMethodNotImplemented)
+      }
+    }
+
+    imagePreviewChannel = FlutterMethodChannel(
+      name: "sendhere/image_preview", binaryMessenger: flutterViewController.engine.binaryMessenger)
+    imagePreviewChannel?.setMethodCallHandler { call, result in
+      guard call.method == "show",
+            let arguments = call.arguments as? [String: Any],
+            let path = arguments["path"] as? String else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      do {
+        try DesktopImagePreviewController.shared.show(
+          path: path, name: arguments["name"] as? String ?? "图片预览")
+        result(nil)
+      } catch {
+        result(FlutterError(code: "image_unavailable", message: error.localizedDescription, details: path))
       }
     }
 

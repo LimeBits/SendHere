@@ -22,6 +22,7 @@ import 'transfer_event.dart';
 
 const _mobileFileChannel = MethodChannel('sendhere/mobile_file');
 const _notificationChannel = MethodChannel('sendhere/notifications');
+const _imagePreviewChannel = MethodChannel('sendhere/image_preview');
 
 Future<void> _openReceivedFile(BuildContext context, String filePath) async {
   try {
@@ -45,8 +46,24 @@ Future<void> _showImagePreview(
   BuildContext context,
   String filePath,
   String fileName,
-) {
-  return Navigator.of(context).push(
+) async {
+  if (Platform.isMacOS) {
+    try {
+      await _imagePreviewChannel.invokeMethod<void>('show', {
+        'path': filePath,
+        'name': fileName,
+      });
+      return;
+    } on PlatformException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message ?? '无法打开图片预览')),
+        );
+      }
+      return;
+    }
+  }
+  await Navigator.of(context).push(
     PageRouteBuilder<void>(
       opaque: true,
       transitionDuration: const Duration(milliseconds: 180),
@@ -1003,7 +1020,7 @@ class _SendHereHomeState extends State<SendHereHome>
                         : _connectedPeers[_selectedPeerId]?.name ?? '消息')
                     : 'SendHere',
                 style: _showMobileConversation
-                    ? const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)
+                    ? const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)
                     : const TextStyle(
                         fontSize: 18, fontWeight: FontWeight.w700),
               )
@@ -1343,22 +1360,26 @@ class _UnreadBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final label = count > 99 ? '99+' : '$count';
     final fontSize = compact ? 9.0 : 11.0;
-    return Container(
-      constraints: BoxConstraints(
-          minWidth: compact ? 16 : 20, minHeight: compact ? 16 : 20),
-      padding: EdgeInsets.symmetric(horizontal: compact ? 3 : 5),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: Colors.red,
-        borderRadius: BorderRadius.circular(count > 9 ? 10 : 999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: fontSize,
-          fontWeight: FontWeight.w700,
-          height: 1,
+    final wide = count > 9;
+    final height = compact ? 16.0 : 22.0;
+    return SizedBox(
+      width: wide ? (compact ? 24 : 28) : height,
+      height: height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.red,
+          borderRadius: BorderRadius.circular(height / 2),
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: fontSize,
+              fontWeight: FontWeight.w700,
+              height: 1,
+            ),
+          ),
         ),
       ),
     );
@@ -1990,7 +2011,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                       tooltip: '发送文件',
                       onPressed: () async {
                         await widget.offerFiles();
-                        _focusInput();
+                        if (Platform.isMacOS) _focusInput();
                       },
                       icon: const Icon(Icons.attach_file),
                     ),

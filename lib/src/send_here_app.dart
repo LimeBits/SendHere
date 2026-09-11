@@ -1948,7 +1948,11 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   final _nativeFieldKey = GlobalKey<NativeTextFieldState>();
   final _scrollController = ScrollController();
   double _composeHeight = _minimumComposeHeight;
+  static const _backGestureEdgeWidth = 56.0;
+  static const _backGestureDistance = 42.0;
   bool _startedAtLeadingEdge = false;
+  Offset? _backGestureStart;
+  int? _backGesturePointer;
   double _backDragOffset = 0;
 
   @override
@@ -2027,22 +2031,39 @@ class _ConversationPanelState extends State<_ConversationPanel> {
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (event) {
-        _startedAtLeadingEdge = event.position.dx <= 28;
+        // Keep this comfortably inside the screen rather than requiring the
+        // physical edge: a phone case often makes the outermost pixels awkward
+        // to reach. Track the pointer directly so child image gestures cannot
+        // make a fast swipe miss the back action.
+        _startedAtLeadingEdge = event.position.dx <= _backGestureEdgeWidth;
+        _backGesturePointer = _startedAtLeadingEdge ? event.pointer : null;
+        _backGestureStart = _startedAtLeadingEdge ? event.position : null;
         if (_startedAtLeadingEdge) _backDragOffset = 0;
       },
       onPointerMove: (event) {
-        if (!_startedAtLeadingEdge || widget.onMobileBack == null) return;
-        final delta = event.delta.dx;
-        if (delta <= 0 && _backDragOffset == 0) return;
+        if (!_startedAtLeadingEdge ||
+            event.pointer != _backGesturePointer ||
+            widget.onMobileBack == null) {
+          return;
+        }
+        final start = _backGestureStart;
+        if (start == null) return;
         setState(() {
-          _backDragOffset = (_backDragOffset + delta).clamp(0, 420);
+          _backDragOffset = (event.position.dx - start.dx).clamp(0, 420);
         });
       },
       onPointerUp: (event) {
+        if (event.pointer != _backGesturePointer) return;
+        final start = _backGestureStart;
+        // Use the final pointer position too. Fast iOS swipes can coalesce
+        // movement events immediately before the finger lifts.
+        final distance = start == null ? 0.0 : event.position.dx - start.dx;
         final shouldGoBack = _startedAtLeadingEdge &&
-            _backDragOffset > 72 &&
+            distance >= _backGestureDistance &&
             widget.onMobileBack != null;
         _startedAtLeadingEdge = false;
+        _backGesturePointer = null;
+        _backGestureStart = null;
         if (shouldGoBack) {
           widget.onMobileBack!();
         } else {
@@ -2050,7 +2071,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         }
       },
       onPointerCancel: (event) {
+        if (event.pointer != _backGesturePointer) return;
         _startedAtLeadingEdge = false;
+        _backGesturePointer = null;
+        _backGestureStart = null;
         setState(() => _backDragOffset = 0);
       },
       child: Transform.translate(

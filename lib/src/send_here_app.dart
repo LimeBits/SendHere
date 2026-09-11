@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -453,6 +454,36 @@ class _SendHereHomeState extends State<SendHereHome>
 
   Future<void> _offerFiles() async {
     try {
+      if (Platform.isIOS || Platform.isAndroid) {
+        final source = await showModalBottomSheet<_AttachmentSource>(
+          context: context,
+          showDragHandle: true,
+          builder: (context) => SafeArea(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('选择照片'),
+                subtitle: const Text('支持多选图片'),
+                onTap: () =>
+                    Navigator.of(context).pop(_AttachmentSource.photos),
+              ),
+              ListTile(
+                leading: const Icon(Icons.folder_open_outlined),
+                title: const Text('选择文件'),
+                subtitle: const Text('任意文件类型'),
+                onTap: () => Navigator.of(context).pop(_AttachmentSource.files),
+              ),
+              const SizedBox(height: 8),
+            ]),
+          ),
+        );
+        if (source == null) return;
+        if (source == _AttachmentSource.photos) {
+          final photos = await ImagePicker().pickMultiImage();
+          await _addFilesToPending(photos.map((file) => file.path).toList());
+          return;
+        }
+      }
       final files = await openFiles();
       await _addFilesToPending(files.map((file) => file.path).toList());
     } catch (error) {
@@ -849,6 +880,8 @@ class _SendHereHomeState extends State<SendHereHome>
   }
 }
 
+enum _AttachmentSource { photos, files }
+
 class _PendingItem {
   const _PendingItem._({this.text, this.path});
 
@@ -895,7 +928,7 @@ class _PeerDevice {
       );
 }
 
-class _DeviceSidebar extends StatelessWidget {
+class _DeviceSidebar extends StatefulWidget {
   const _DeviceSidebar({
     required this.url,
     required this.connectedPeers,
@@ -919,57 +952,82 @@ class _DeviceSidebar extends StatelessWidget {
   final ValueChanged<String> deleteConversation;
 
   @override
-  Widget build(BuildContext context) => Card(
-        clipBehavior: Clip.antiAlias,
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 18, 16, 10),
-            child: Text('设备列表',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-          ),
-          Expanded(
-            child: connectedPeers.isEmpty
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('暂无设备\n附近电脑会自动显示在这里',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.black54)),
-                    ),
-                  )
-                : ListView(
-                    children: (List<_PeerDevice>.from(connectedPeers)
-                          ..sort((a, b) {
-                            if (a.online != b.online) return a.online ? -1 : 1;
-                            return b.lastSeenAt.compareTo(a.lastSeenAt);
-                          }))
-                        .map((device) => _DeviceTile(
-                            device: device,
-                            selected: selectedPeerId == device.id,
-                            select: selectPeer,
-                            deleteConversation: deleteConversation))
-                        .toList(),
-                  ),
-          ),
-          if (showPhoneConnection) ...[
-            const Divider(height: 1),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              child: phoneQrExpanded
-                  ? _PhoneConnectCard(url: url, onCollapse: hidePhoneQr)
-                  : Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: FilledButton.icon(
-                        onPressed: connectPhone,
-                        icon: const Icon(Icons.phone_iphone_outlined),
-                        label: const Text('连接手机'),
+  State<_DeviceSidebar> createState() => _DeviceSidebarState();
+}
+
+class _DeviceSidebarState extends State<_DeviceSidebar> {
+  String? _revealedDeviceId;
+
+  void _collapseActions() {
+    if (_revealedDeviceId != null) setState(() => _revealedDeviceId = null);
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: _collapseActions,
+        child: Card(
+          clipBehavior: Clip.antiAlias,
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 18, 16, 10),
+              child: Text('设备列表',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+            Expanded(
+              child: widget.connectedPeers.isEmpty
+                  ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text('暂无设备\n附近电脑会自动显示在这里',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.black54)),
                       ),
+                    )
+                  : ListView(
+                      children: (List<_PeerDevice>.from(widget.connectedPeers)
+                            ..sort((a, b) {
+                              if (a.online != b.online) {
+                                return a.online ? -1 : 1;
+                              }
+                              return b.lastSeenAt.compareTo(a.lastSeenAt);
+                            }))
+                          .map((device) => _DeviceTile(
+                              device: device,
+                              selected: widget.selectedPeerId == device.id,
+                              select: (id) {
+                                _collapseActions();
+                                widget.selectPeer(id);
+                              },
+                              deleteConversation: widget.deleteConversation,
+                              revealed: _revealedDeviceId == device.id,
+                              reveal: () =>
+                                  setState(() => _revealedDeviceId = device.id),
+                              collapse: _collapseActions))
+                          .toList(),
                     ),
             ),
-          ],
-        ]),
+            if (widget.showPhoneConnection) ...[
+              const Divider(height: 1),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                child: widget.phoneQrExpanded
+                    ? _PhoneConnectCard(
+                        url: widget.url, onCollapse: widget.hidePhoneQr)
+                    : Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: FilledButton.icon(
+                          onPressed: widget.connectPhone,
+                          icon: const Icon(Icons.phone_iphone_outlined),
+                          label: const Text('连接手机'),
+                        ),
+                      ),
+              ),
+            ],
+          ]),
+        ),
       );
 }
 
@@ -979,12 +1037,18 @@ class _DeviceTile extends StatelessWidget {
     required this.selected,
     required this.select,
     required this.deleteConversation,
+    required this.revealed,
+    required this.reveal,
+    required this.collapse,
   });
 
   final _PeerDevice device;
   final bool selected;
   final ValueChanged<String> select;
   final ValueChanged<String> deleteConversation;
+  final bool revealed;
+  final VoidCallback reveal;
+  final VoidCallback collapse;
 
   @override
   Widget build(BuildContext context) {
@@ -1019,6 +1083,9 @@ class _DeviceTile extends StatelessWidget {
         deviceId: device.id,
         confirmDelete: () => _confirmDelete(context),
         deleteConversation: deleteConversation,
+        revealed: revealed,
+        reveal: reveal,
+        collapse: collapse,
         revealedChild: Material(
           color: Theme.of(context).scaffoldBackgroundColor,
           child: ListTile(
@@ -1161,6 +1228,9 @@ class _SwipeConversationTile extends StatefulWidget {
     required this.deviceId,
     required this.confirmDelete,
     required this.deleteConversation,
+    required this.revealed,
+    required this.reveal,
+    required this.collapse,
     required this.child,
     required this.revealedChild,
   });
@@ -1168,6 +1238,9 @@ class _SwipeConversationTile extends StatefulWidget {
   final String deviceId;
   final Future<bool?> Function() confirmDelete;
   final ValueChanged<String> deleteConversation;
+  final bool revealed;
+  final VoidCallback reveal;
+  final VoidCallback collapse;
   final Widget child;
   final Widget revealedChild;
 
@@ -1177,36 +1250,24 @@ class _SwipeConversationTile extends StatefulWidget {
 
 class _SwipeConversationTileState extends State<_SwipeConversationTile> {
   static const _actionWidth = 88.0;
-  double _offset = 0;
-  bool _revealed = false;
+  double _dragOffset = 0;
 
   void _handleDragUpdate(DragUpdateDetails details) {
-    if (_revealed) return;
+    if (widget.revealed) return;
     setState(() {
-      _offset = (_offset + details.delta.dx).clamp(-_actionWidth, 0.0);
+      _dragOffset = (_dragOffset + details.delta.dx).clamp(-_actionWidth, 0.0);
     });
   }
 
   void _handleDragEnd(DragEndDetails details) {
-    if (_revealed) {
-      if (details.velocity.pixelsPerSecond.dx > 250) _collapse();
+    if (widget.revealed) {
+      if (details.velocity.pixelsPerSecond.dx > 250) widget.collapse();
       return;
     }
-    final shouldReveal = _offset.abs() > _actionWidth / 2 ||
+    final shouldReveal = _dragOffset.abs() > _actionWidth / 2 ||
         details.velocity.pixelsPerSecond.dx < -450;
-    setState(() {
-      _revealed = shouldReveal;
-      _offset = 0;
-    });
-  }
-
-  void _collapse() {
-    if (_revealed || _offset != 0) {
-      setState(() {
-        _revealed = false;
-        _offset = 0;
-      });
-    }
+    setState(() => _dragOffset = 0);
+    if (shouldReveal) widget.reveal();
   }
 
   Future<void> _delete() async {
@@ -1214,69 +1275,56 @@ class _SwipeConversationTileState extends State<_SwipeConversationTile> {
     widget.deleteConversation(widget.deviceId);
   }
 
-  Widget _deleteAction(BuildContext context) => SizedBox(
-        width: _actionWidth,
-        child: Material(
-          color: Theme.of(context).colorScheme.error,
-          child: InkWell(
-            onTap: _delete,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.delete_outline,
-                    color: Theme.of(context).colorScheme.onError),
-                const SizedBox(height: 2),
-                Text('删除',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onError)),
-              ],
-            ),
+  Widget _deleteAction(BuildContext context) => Material(
+        color: Theme.of(context).colorScheme.error,
+        child: InkWell(
+          onTap: _delete,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.delete_outline,
+                  color: Theme.of(context).colorScheme.onError),
+              const SizedBox(height: 2),
+              Text('删除',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onError)),
+            ],
           ),
         ),
       );
 
   @override
-  Widget build(BuildContext context) {
-    if (_revealed) {
-      return Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: _collapse,
-              onHorizontalDragEnd: _handleDragEnd,
-              child: widget.revealedChild,
-            ),
+  Widget build(BuildContext context) => SizedBox(
+        height: 72,
+        child: ClipRect(
+          child: Stack(
+            children: [
+              Positioned(
+                top: 0,
+                right: 0,
+                bottom: 0,
+                width: _actionWidth,
+                child: _deleteAction(context),
+              ),
+              Positioned.fill(
+                right: widget.revealed ? _actionWidth : 0,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: widget.revealed ? widget.collapse : null,
+                  onHorizontalDragUpdate: _handleDragUpdate,
+                  onHorizontalDragEnd: _handleDragEnd,
+                  child: Transform.translate(
+                    offset: Offset(widget.revealed ? 0 : _dragOffset, 0),
+                    child:
+                        widget.revealed ? widget.revealedChild : widget.child,
+                  ),
+                ),
+              ),
+            ],
           ),
-          _deleteAction(context),
-        ],
+        ),
       );
-    }
-    return ClipRect(
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: _deleteAction(context),
-            ),
-          ),
-          AnimatedSlide(
-            offset: Offset(_offset / _actionWidth, 0),
-            duration: const Duration(milliseconds: 120),
-            curve: Curves.easeOut,
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onHorizontalDragUpdate: _handleDragUpdate,
-              onHorizontalDragEnd: _handleDragEnd,
-              child: widget.child,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _PhoneConnectCard extends StatelessWidget {

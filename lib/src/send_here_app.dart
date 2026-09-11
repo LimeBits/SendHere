@@ -872,6 +872,53 @@ class _SendHereHomeState extends State<SendHereHome>
     setState(() => _phoneQrExpanded = true);
   }
 
+  Future<void> _showMobileConnectQr() async {
+    final server = _server;
+    final address = _address;
+    if (server == null || address == null) return;
+    server.refreshToken(disconnectExisting: false);
+    final url = 'http://$address:${server.port}/?token=${server.token}';
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('连接此手机',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            const Text('让同一局域网内的设备扫码，即可在浏览器中发送文本和文件。',
+                textAlign: TextAlign.center, style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.black12),
+              ),
+              child: QrImageView(data: url, size: 220),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: url));
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('连接链接已复制')),
+                  );
+                }
+              },
+              icon: const Icon(Icons.copy_outlined, size: 18),
+              label: const Text('复制连接链接'),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
   void _hidePhoneConnectPanel() => setState(() => _phoneQrExpanded = false);
 
   void _openMobileConversation(String id) {
@@ -935,6 +982,18 @@ class _SendHereHomeState extends State<SendHereHome>
                 onPressed: () =>
                     setState(() => _showMobileConversation = false),
               )
+            : null,
+        actions: mobile && !_showMobileConversation
+            ? [
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: IconButton.filledTonal(
+                    tooltip: '连接此手机',
+                    onPressed: _showMobileConnectQr,
+                    icon: const Icon(Icons.add),
+                  ),
+                ),
+              ]
             : null,
         title: mobile
             ? Text(
@@ -1007,7 +1066,35 @@ class _SendHereHomeState extends State<SendHereHome>
                           : null,
                     );
                     if (mobile) {
-                      return _showMobileConversation ? conversation : sidebar;
+                      return AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 260),
+                        reverseDuration: const Duration(milliseconds: 220),
+                        transitionBuilder: (child, animation) {
+                          final conversationChild =
+                              child.key == const ValueKey('conversation');
+                          final offset = Tween<Offset>(
+                            begin: conversationChild
+                                ? const Offset(1, 0)
+                                : const Offset(-0.12, 0),
+                            end: Offset.zero,
+                          ).animate(CurvedAnimation(
+                            parent: animation,
+                            curve: Curves.easeOutCubic,
+                            reverseCurve: Curves.easeInCubic,
+                          ));
+                          return SlideTransition(
+                              position: offset, child: child);
+                        },
+                        child: _showMobileConversation
+                            ? KeyedSubtree(
+                                key: const ValueKey('conversation'),
+                                child: conversation,
+                              )
+                            : KeyedSubtree(
+                                key: const ValueKey('devices'),
+                                child: sidebar,
+                              ),
+                      );
                     }
                     return Row(children: [
                       SizedBox(width: 300, child: sidebar),
@@ -1726,6 +1813,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   final _scrollController = ScrollController();
   double _composeHeight = _minimumComposeHeight;
   bool _startedAtLeadingEdge = false;
+  double _backDragOffset = 0;
 
   @override
   void didUpdateWidget(covariant _ConversationPanel oldWidget) {
@@ -1805,100 +1893,118 @@ class _ConversationPanelState extends State<_ConversationPanel> {
       onHorizontalDragStart: (details) {
         _startedAtLeadingEdge = details.globalPosition.dx <= 28;
       },
+      onHorizontalDragUpdate: (details) {
+        if (!_startedAtLeadingEdge || widget.onMobileBack == null) return;
+        setState(() {
+          _backDragOffset = (_backDragOffset + details.delta.dx).clamp(0, 420);
+        });
+      },
       onHorizontalDragEnd: (details) {
         final shouldGoBack = _startedAtLeadingEdge &&
-            (details.primaryVelocity ?? 0) > 250 &&
+            (_backDragOffset > 96 || (details.primaryVelocity ?? 0) > 250) &&
             widget.onMobileBack != null;
         _startedAtLeadingEdge = false;
-        if (shouldGoBack) widget.onMobileBack!();
+        if (shouldGoBack) {
+          widget.onMobileBack!();
+        } else {
+          setState(() => _backDragOffset = 0);
+        }
       },
-      child: Card(
-        clipBehavior: Clip.antiAlias,
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Expanded(
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: (_) => _dismissKeyboard(),
-              child: messages.isEmpty
-                  ? Center(
-                      child: Text(widget.online ? '还没有消息，开始发送吧。' : '该设备暂时不可用'),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.all(18),
-                      itemCount: messages.length,
-                      itemBuilder: (_, index) => _MessageBubble(
-                        event: messages[index],
-                        cancelOutboxItem: widget.cancelOutboxItem,
+      onHorizontalDragCancel: () {
+        _startedAtLeadingEdge = false;
+        setState(() => _backDragOffset = 0);
+      },
+      child: Transform.translate(
+        offset: Offset(_backDragOffset, 0),
+        child: Card(
+          clipBehavior: Clip.antiAlias,
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Expanded(
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => _dismissKeyboard(),
+                child: messages.isEmpty
+                    ? Center(
+                        child:
+                            Text(widget.online ? '还没有消息，开始发送吧。' : '该设备暂时不可用'),
+                      )
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.all(18),
+                        itemCount: messages.length,
+                        itemBuilder: (_, index) => _MessageBubble(
+                          event: messages[index],
+                          cancelOutboxItem: widget.cancelOutboxItem,
+                        ),
                       ),
-                    ),
-            ),
-          ),
-          const Divider(height: 1),
-          Container(
-            margin: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerLowest,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.black26),
-            ),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-                child: NativeTextField(
-                  key: _nativeFieldKey,
-                  initialText: widget.draft,
-                  composeItems: widget.pendingItems
-                      .map((item) => item.isFile
-                          ? NativeComposeItem.file(
-                              item.path!, path.basename(item.path!))
-                          : NativeComposeItem.text(item.text!))
-                      .toList(),
-                  height: _composeHeight,
-                  onContentHeightChanged: (contentHeight) {
-                    final nextHeight = contentHeight.clamp(
-                      _minimumComposeHeight,
-                      _maximumComposeHeight,
-                    );
-                    if ((nextHeight - _composeHeight).abs() > 0.5) {
-                      setState(() => _composeHeight = nextHeight);
-                    }
-                  },
-                  onFilesDropped: (paths) {
-                    widget.addDroppedFiles(paths);
-                    _focusInput();
-                  },
-                  onComposeChanged: widget.replacePendingCompose,
-                  onChanged: (value) {
-                    widget.controller.text = value;
-                    widget.onDraftChanged(value);
-                  },
-                  onSubmitted: _submit,
-                ),
               ),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(6, 0, 8, 4),
-                child: Row(children: [
-                  IconButton(
-                    tooltip: '发送文件',
-                    onPressed: () async {
-                      await widget.offerFiles();
+            ),
+            const Divider(height: 1),
+            Container(
+              margin: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.black26),
+              ),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                  child: NativeTextField(
+                    key: _nativeFieldKey,
+                    initialText: widget.draft,
+                    composeItems: widget.pendingItems
+                        .map((item) => item.isFile
+                            ? NativeComposeItem.file(
+                                item.path!, path.basename(item.path!))
+                            : NativeComposeItem.text(item.text!))
+                        .toList(),
+                    height: _composeHeight,
+                    onContentHeightChanged: (contentHeight) {
+                      final nextHeight = contentHeight.clamp(
+                        _minimumComposeHeight,
+                        _maximumComposeHeight,
+                      );
+                      if ((nextHeight - _composeHeight).abs() > 0.5) {
+                        setState(() => _composeHeight = nextHeight);
+                      }
+                    },
+                    onFilesDropped: (paths) {
+                      widget.addDroppedFiles(paths);
                       _focusInput();
                     },
-                    icon: const Icon(Icons.attach_file),
+                    onComposeChanged: widget.replacePendingCompose,
+                    onChanged: (value) {
+                      widget.controller.text = value;
+                      widget.onDraftChanged(value);
+                    },
+                    onSubmitted: _submit,
                   ),
-                  const Spacer(),
-                  FilledButton.icon(
-                      onPressed: () => _submit(widget.controller.text),
-                      icon: const Icon(Icons.send),
-                      label: const Text('发送')),
-                ]),
-              ),
-            ]),
-          ),
-        ]),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(6, 0, 8, 4),
+                  child: Row(children: [
+                    IconButton(
+                      tooltip: '发送文件',
+                      onPressed: () async {
+                        await widget.offerFiles();
+                        _focusInput();
+                      },
+                      icon: const Icon(Icons.attach_file),
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                        onPressed: () => _submit(widget.controller.text),
+                        icon: const Icon(Icons.send),
+                        label: const Text('发送')),
+                  ]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
       ),
     );
   }

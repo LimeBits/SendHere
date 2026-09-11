@@ -469,15 +469,27 @@ class LocalTransferServer {
   Future<void> sendFileToPeer(String deviceId, File file,
       {String? transferId, String? fileName}) async {
     if (!hasPeer(deviceId)) throw StateError('设备未连接');
-    final session = await _ensurePeerUploadSession(deviceId);
-    if (session == null) throw StateError('无法获取设备的文件传输会话');
+    // A peer WebSocket can arrive a fraction before its mDNS endpoint reaches
+    // this process. Wait briefly so choosing a file immediately after a device
+    // appears does not fail solely because the upload session is not ready.
+    _PeerSession? session;
+    for (var attempt = 0; attempt < 4 && session == null; attempt++) {
+      session = await _ensurePeerUploadSession(deviceId);
+      if (session == null && attempt < 3) {
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
+    }
+    if (session == null) {
+      throw StateError('设备连接尚未准备好文件传输，请稍后重试');
+    }
+    final uploadSession = session;
     final filename = fileName ?? path.basename(file.path);
     final size = await file.length();
     final id = transferId ?? _newToken();
     _emitFileTransfer(
       transferId: id,
       deviceId: deviceId,
-      deviceName: session.deviceName,
+      deviceName: uploadSession.deviceName,
       file: file,
       fileName: filename,
       fileSize: size,
@@ -489,14 +501,14 @@ class LocalTransferServer {
       // Share the direct binary upload protocol used by mobile web views.
       // Unlike manually assembled multipart requests, it does not mix request
       // writes with addStream and therefore cannot enter HttpClient's Bad state.
-      final request =
-          await client.postUrl(session.baseUri.replace(path: '/api/upload'));
+      final request = await client
+          .postUrl(uploadSession.baseUri.replace(path: '/api/upload'));
       request.headers
         ..set(HttpHeaders.contentTypeHeader,
             lookupMimeType(filename) ?? 'application/octet-stream')
-        ..set('x-sendhere-token', session.token)
+        ..set('x-sendhere-token', uploadSession.token)
         ..set('x-sendhere-client-name', Uri.encodeComponent(deviceName))
-        ..set('x-sendhere-device-id', session.senderDeviceId)
+        ..set('x-sendhere-device-id', uploadSession.senderDeviceId)
         ..set('x-sendhere-file-name', Uri.encodeComponent(filename));
       request.contentLength = size;
       var bytesTransferred = 0;
@@ -506,7 +518,7 @@ class LocalTransferServer {
           _emitFileTransfer(
             transferId: id,
             deviceId: deviceId,
-            deviceName: session.deviceName,
+            deviceName: uploadSession.deviceName,
             file: file,
             fileName: filename,
             fileSize: size,
@@ -524,7 +536,7 @@ class LocalTransferServer {
       _emitFileTransfer(
         transferId: id,
         deviceId: deviceId,
-        deviceName: session.deviceName,
+        deviceName: uploadSession.deviceName,
         file: file,
         fileName: filename,
         fileSize: size,
@@ -535,7 +547,7 @@ class LocalTransferServer {
       _emitFileTransfer(
         transferId: id,
         deviceId: deviceId,
-        deviceName: session.deviceName,
+        deviceName: uploadSession.deviceName,
         file: file,
         fileName: filename,
         fileSize: size,

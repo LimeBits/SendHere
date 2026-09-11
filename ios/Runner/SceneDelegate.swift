@@ -65,8 +65,7 @@ class SceneDelegate: FlutterSceneDelegate {
     let fileChannel = FlutterMethodChannel(
       name: "sendhere/mobile_file", binaryMessenger: controller.binaryMessenger)
     fileChannel.setMethodCallHandler { [weak self, weak controller] call, result in
-      guard call.method == "open",
-            let arguments = call.arguments as? [String: Any],
+      guard let arguments = call.arguments as? [String: Any],
             let path = arguments["path"] as? String else {
         result(FlutterMethodNotImplemented)
         return
@@ -76,6 +75,19 @@ class SceneDelegate: FlutterSceneDelegate {
         return
       }
 
+      if call.method == "saveImage" {
+        guard let image = UIImage(contentsOfFile: path) else {
+          result(FlutterError(code: "image_unavailable", message: "无法读取图片文件", details: path))
+          return
+        }
+        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+        result(nil)
+        return
+      }
+      guard call.method == "open" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
       let documentController = UIDocumentInteractionController(url: URL(fileURLWithPath: path))
       self?.documentController = documentController
       guard let view = controller?.view else {

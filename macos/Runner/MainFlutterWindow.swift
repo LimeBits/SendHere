@@ -55,11 +55,25 @@ private final class DesktopImagePreviewController: NSObject {
         userInfo: [NSLocalizedDescriptionKey: "无法读取图片文件"])
     }
     let screenFrame = (NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800))
+    let imageSize = image.size
+    let aspectRatio = imageSize.width > 0 && imageSize.height > 0
+      ? imageSize.width / imageSize.height : 1
+    let maximumWidth = screenFrame.width * 0.9
+    let maximumHeight = screenFrame.height * 0.9
+    let contentWidth: CGFloat
+    let contentHeight: CGFloat
+    if maximumWidth / maximumHeight > aspectRatio {
+      contentHeight = maximumHeight
+      contentWidth = contentHeight * aspectRatio
+    } else {
+      contentWidth = maximumWidth
+      contentHeight = contentWidth / aspectRatio
+    }
     let frame = NSRect(
-      x: screenFrame.midX - screenFrame.width * 0.45,
-      y: screenFrame.midY - screenFrame.height * 0.45,
-      width: screenFrame.width * 0.9,
-      height: screenFrame.height * 0.9)
+      x: screenFrame.midX - contentWidth / 2,
+      y: screenFrame.midY - contentHeight / 2,
+      width: contentWidth,
+      height: contentHeight)
     let preview = NSWindow(
       contentRect: frame,
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -67,18 +81,54 @@ private final class DesktopImagePreviewController: NSObject {
       defer: false)
     preview.title = name
     preview.isReleasedWhenClosed = false
-    preview.minSize = NSSize(width: 480, height: 360)
+    preview.minSize = NSSize(width: 320, height: 240)
 
-    let imageView = NSImageView(frame: preview.contentView?.bounds ?? .zero)
+    let contentView = NSView(frame: preview.contentView?.bounds ?? .zero)
+    contentView.autoresizingMask = [.width, .height]
+    let imageView = NSImageView(frame: contentView.bounds)
     imageView.image = image
     imageView.imageScaling = .scaleProportionallyUpOrDown
     imageView.imageAlignment = .alignCenter
     imageView.autoresizingMask = [.width, .height]
-    preview.contentView = imageView
+    contentView.addSubview(imageView)
+    let saveButton = NSButton(
+      image: NSImage(systemSymbolName: "arrow.down.to.line.compact", accessibilityDescription: "下载到本地") ?? NSImage(),
+      target: self,
+      action: #selector(saveFromPreview(_:)))
+    saveButton.bezelStyle = .texturedRounded
+    saveButton.toolTip = "下载到本地"
+    saveButton.identifier = NSUserInterfaceItemIdentifier(path)
+    saveButton.frame = NSRect(x: contentView.bounds.width - 48, y: 12, width: 36, height: 32)
+    saveButton.autoresizingMask = [.minXMargin, .maxYMargin]
+    contentView.addSubview(saveButton)
+    preview.contentView = contentView
     preview.center()
     preview.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
     window = preview
+  }
+
+  @objc private func saveFromPreview(_ sender: NSButton) {
+    guard let path = sender.identifier?.rawValue else { return }
+    save(path: path)
+  }
+
+  func save(path: String) {
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = URL(fileURLWithPath: path).lastPathComponent
+    panel.canCreateDirectories = true
+    panel.begin { response in
+      guard response == .OK, let destination = panel.url else { return }
+      do {
+        let source = URL(fileURLWithPath: path)
+        if FileManager.default.fileExists(atPath: destination.path) {
+          try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.copyItem(at: source, to: destination)
+      } catch {
+        NSAlert(error: error).runModal()
+      }
+    }
   }
 }
 
@@ -164,18 +214,29 @@ class MainFlutterWindow: NSWindow {
     imagePreviewChannel = FlutterMethodChannel(
       name: "sendhere/image_preview", binaryMessenger: flutterViewController.engine.binaryMessenger)
     imagePreviewChannel?.setMethodCallHandler { call, result in
-      guard call.method == "show",
-            let arguments = call.arguments as? [String: Any],
+      guard let arguments = call.arguments as? [String: Any],
             let path = arguments["path"] as? String else {
         result(FlutterMethodNotImplemented)
         return
       }
-      do {
-        try DesktopImagePreviewController.shared.show(
-          path: path, name: arguments["name"] as? String ?? "图片预览")
+      switch call.method {
+      case "show":
+        do {
+          try DesktopImagePreviewController.shared.show(
+            path: path, name: arguments["name"] as? String ?? "图片预览")
+          result(nil)
+        } catch {
+          result(FlutterError(code: "image_unavailable", message: error.localizedDescription, details: path))
+        }
+      case "save":
+        guard FileManager.default.fileExists(atPath: path) else {
+          result(FlutterError(code: "file_missing", message: "文件已不存在", details: path))
+          return
+        }
+        DesktopImagePreviewController.shared.save(path: path)
         result(nil)
-      } catch {
-        result(FlutterError(code: "image_unavailable", message: error.localizedDescription, details: path))
+      default:
+        result(FlutterMethodNotImplemented)
       }
     }
 

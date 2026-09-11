@@ -42,6 +42,61 @@ Future<void> _openReceivedFile(BuildContext context, String filePath) async {
   }
 }
 
+Future<void> _saveImageToDevice(
+  BuildContext context,
+  String filePath,
+  String fileName,
+) async {
+  try {
+    if (Platform.isMacOS) {
+      await _imagePreviewChannel.invokeMethod<void>('save', {
+        'path': filePath,
+        'name': fileName,
+      });
+    } else {
+      await _mobileFileChannel.invokeMethod<void>('saveImage', {
+        'path': filePath,
+        'name': fileName,
+      });
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('图片已保存')));
+    }
+  } on PlatformException catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message ?? '无法保存图片')),
+      );
+    }
+  }
+}
+
+Future<void> _showImageActions(
+  BuildContext context,
+  String filePath,
+  String fileName, {
+  Offset? position,
+}) async {
+  if (Platform.isMacOS) {
+    final anchor = position ?? Offset.zero;
+    final menuPosition = RelativeRect.fromRect(
+      Rect.fromLTWH(anchor.dx, anchor.dy, 1, 1),
+      Offset.zero & MediaQuery.sizeOf(context),
+    );
+    final action = await showMenu<String>(
+      context: context,
+      position: menuPosition,
+      items: const [PopupMenuItem(value: 'save', child: Text('下载到本地'))],
+    );
+    if (action == 'save' && context.mounted) {
+      await _saveImageToDevice(context, filePath, fileName);
+    }
+    return;
+  }
+  await _saveImageToDevice(context, filePath, fileName);
+}
+
 Future<void> _showImagePreview(
   BuildContext context,
   String filePath,
@@ -157,20 +212,23 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
               ),
             ),
           ),
-          if (!_mobile)
-            SafeArea(
-              child: Align(
-                alignment: Alignment.topRight,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: IconButton.filled(
-                    tooltip: '关闭',
-                    onPressed: _close,
-                    icon: const Icon(Icons.close),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.bottomRight,
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: IconButton.filled(
+                  tooltip: '保存到相册',
+                  onPressed: () => _saveImageToDevice(
+                    context,
+                    widget.filePath,
+                    widget.fileName,
                   ),
+                  icon: const Icon(Icons.download_outlined),
                 ),
               ),
             ),
+          ),
         ],
       ),
     );
@@ -805,13 +863,10 @@ class _SendHereHomeState extends State<SendHereHome>
             );
           }
           await _outbox.remove(item.id);
-          // A phone receives a download URL, not the file bytes. Its browser may
-          // download much later, so retain the archived source while this app is
-          // running. Mac-to-Mac uploads have completed at this point and can be
-          // safely removed.
-          if (item.isFile && server.hasPeer(deviceId)) {
-            await _deleteArchivedFile(item.filePath!);
-          }
+          // Keep the app-owned source after delivery. Conversation thumbnails,
+          // image preview and the user's later “save/download” action all refer
+          // to this immutable copy; deleting it made successfully sent desktop
+          // images appear as unreadable files.
         } catch (error) {
           await _setOutboxStatus(
             item,
@@ -1447,7 +1502,7 @@ class _DeviceAvatar extends StatelessWidget {
                   ? Icons.phone_iphone_outlined
                   : Icons.computer_outlined),
             ),
-            if (unreadCount > 0 && (Platform.isIOS || Platform.isAndroid))
+            if (unreadCount > 0)
               Positioned(
                 top: -2,
                 right: -3,
@@ -1503,11 +1558,6 @@ class _DeviceTile extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (unreadCount > 0 && !(Platform.isIOS || Platform.isAndroid))
-              Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: _UnreadBadge(count: unreadCount),
-              ),
             device.online
                 ? const Icon(Icons.circle, size: 10, color: Colors.green)
                 : Icon(
@@ -2119,6 +2169,21 @@ class _MessageBubble extends StatelessWidget {
                                         context,
                                         event.localPath!,
                                       ),
+                          onLongPress: event.localPath == null || !image
+                              ? null
+                              : () => _showImageActions(
+                                    context,
+                                    event.localPath!,
+                                    event.fileName ?? '图片',
+                                  ),
+                          onSecondaryTapDown: event.localPath == null || !image
+                              ? null
+                              : (details) => _showImageActions(
+                                    context,
+                                    event.localPath!,
+                                    event.fileName ?? '图片',
+                                    position: details.globalPosition,
+                                  ),
                           child: image && event.localPath != null
                               ? ConstrainedBox(
                                   constraints:
@@ -2127,7 +2192,7 @@ class _MessageBubble extends StatelessWidget {
                                     borderRadius: BorderRadius.circular(8),
                                     child: Image.file(File(event.localPath!),
                                         height: 180,
-                                        fit: BoxFit.fitHeight,
+                                        fit: BoxFit.contain,
                                         errorBuilder: (_, __, ___) =>
                                             _FileLabel(name: event.fileName)),
                                   ),

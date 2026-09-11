@@ -56,6 +56,7 @@ class _SendHereHomeState extends State<SendHereHome> {
   String? _error;
   String? _selectedPeerId;
   bool _phoneQrExpanded = false;
+  bool _showMobileConversation = false;
 
   static const _recentDevicesKey = 'sendhere-recent-devices';
   static const _conversationDropChannel =
@@ -551,6 +552,11 @@ class _SendHereHomeState extends State<SendHereHome> {
 
   void _hidePhoneConnectPanel() => setState(() => _phoneQrExpanded = false);
 
+  void _openMobileConversation(String id) {
+    _selectPeer(id);
+    setState(() => _showMobileConversation = true);
+  }
+
   @override
   void dispose() {
     _conversationDropChannel.setMethodCallHandler(null);
@@ -565,16 +571,33 @@ class _SendHereHomeState extends State<SendHereHome> {
   @override
   Widget build(BuildContext context) {
     final url = _url;
+    final mobile = Platform.isIOS || Platform.isAndroid;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        toolbarHeight: 12,
+        toolbarHeight: mobile ? kToolbarHeight : 12,
+        automaticallyImplyLeading: false,
+        leading: mobile && _showMobileConversation
+            ? IconButton(
+                tooltip: '返回设备列表',
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () =>
+                    setState(() => _showMobileConversation = false),
+              )
+            : null,
+        title: mobile
+            ? Text(_showMobileConversation
+                ? (_selectedPeerId == null
+                    ? '消息'
+                    : _connectedPeers[_selectedPeerId]?.name ?? '消息')
+                : '设备')
+            : null,
       ),
       body: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.all(mobile ? 0 : 16),
         child: _error != null
             ? _ErrorView(error: _error!, retry: _startServer)
             : _server == null || url == null
@@ -584,8 +607,10 @@ class _SendHereHomeState extends State<SendHereHome> {
                       url: url,
                       connectedPeers: _connectedPeers.values.toList(),
                       selectedPeerId: _selectedPeerId,
-                      selectPeer: _selectPeer,
+                      selectPeer:
+                          mobile ? _openMobileConversation : _selectPeer,
                       connectPhone: _showPhoneConnectPanel,
+                      showPhoneConnection: !mobile,
                       phoneQrExpanded: _phoneQrExpanded,
                       hidePhoneQr: _hidePhoneConnectPanel,
                     );
@@ -617,12 +642,8 @@ class _SendHereHomeState extends State<SendHereHome> {
                         if (id != null) _drafts[id] = value;
                       },
                     );
-                    if (constraints.maxWidth < 700) {
-                      return Column(children: [
-                        SizedBox(height: 210, child: sidebar),
-                        const SizedBox(height: 12),
-                        Expanded(child: conversation),
-                      ]);
+                    if (mobile) {
+                      return _showMobileConversation ? conversation : sidebar;
                     }
                     return Row(children: [
                       SizedBox(width: 300, child: sidebar),
@@ -688,6 +709,7 @@ class _DeviceSidebar extends StatelessWidget {
     required this.selectedPeerId,
     required this.selectPeer,
     required this.connectPhone,
+    required this.showPhoneConnection,
     required this.phoneQrExpanded,
     required this.hidePhoneQr,
   });
@@ -697,6 +719,7 @@ class _DeviceSidebar extends StatelessWidget {
   final String? selectedPeerId;
   final ValueChanged<String> selectPeer;
   final VoidCallback connectPhone;
+  final bool showPhoneConnection;
   final bool phoneQrExpanded;
   final VoidCallback hidePhoneQr;
 
@@ -733,21 +756,23 @@ class _DeviceSidebar extends StatelessWidget {
                         .toList(),
                   ),
           ),
-          const Divider(height: 1),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            child: phoneQrExpanded
-                ? _PhoneConnectCard(url: url, onCollapse: hidePhoneQr)
-                : Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: FilledButton.icon(
-                      onPressed: connectPhone,
-                      icon: const Icon(Icons.phone_iphone_outlined),
-                      label: const Text('连接手机'),
+          if (showPhoneConnection) ...[
+            const Divider(height: 1),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              child: phoneQrExpanded
+                  ? _PhoneConnectCard(url: url, onCollapse: hidePhoneQr)
+                  : Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: FilledButton.icon(
+                        onPressed: connectPhone,
+                        icon: const Icon(Icons.phone_iphone_outlined),
+                        label: const Text('连接手机'),
+                      ),
                     ),
-                  ),
-          ),
+            ),
+          ],
         ]),
       );
 }

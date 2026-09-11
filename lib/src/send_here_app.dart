@@ -989,27 +989,30 @@ class _DeviceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final phone = device.name.contains('手机') || device.name.contains('iPhone');
-    final tile = ListTile(
-      selected: selected,
-      selectedTileColor: Theme.of(context).colorScheme.secondaryContainer,
-      leading: CircleAvatar(
-          backgroundColor: device.online
-              ? null
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
-          child: Icon(
-              phone ? Icons.phone_iphone_outlined : Icons.computer_outlined)),
-      minVerticalPadding: 7,
-      title: Text(device.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-      subtitle: Text(
-          device.online ? '在线' : _lastSeenLabel(context, device.lastSeenAt),
-          style: const TextStyle(fontSize: 12)),
-      trailing: device.online
-          ? const Icon(Icons.circle, size: 10, color: Colors.green)
-          : const Icon(Icons.cloud_off_outlined),
-      onTap: () => select(device.id),
+    final tile = Material(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: ListTile(
+        selected: selected,
+        selectedTileColor: Theme.of(context).colorScheme.secondaryContainer,
+        leading: CircleAvatar(
+            backgroundColor: device.online
+                ? null
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Icon(
+                phone ? Icons.phone_iphone_outlined : Icons.computer_outlined)),
+        minVerticalPadding: 7,
+        title: Text(device.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+        subtitle: Text(
+            device.online ? '在线' : _lastSeenLabel(context, device.lastSeenAt),
+            style: const TextStyle(fontSize: 12)),
+        trailing: device.online
+            ? const Icon(Icons.circle, size: 10, color: Colors.green)
+            : const Icon(Icons.cloud_off_outlined),
+        onTap: () => select(device.id),
+      ),
     );
     if (Platform.isIOS || Platform.isAndroid) {
       return _SwipeConversationTile(
@@ -1055,9 +1058,15 @@ class _DeviceTile extends StatelessWidget {
             details.globalPosition.dx, details.globalPosition.dy, 0, 0),
         Offset.zero & overlay.size,
       ),
-      items: const [
-        PopupMenuItem(value: 'open', child: Text('打开会话')),
-        PopupMenuItem(value: 'delete', child: Text('删除会话')),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      menuPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+      items: [
+        const _RoundedMenuItem(value: 'open', child: Text('打开会话')),
+        _RoundedMenuItem(
+          value: 'delete',
+          color: Theme.of(context).colorScheme.error,
+          child: const Text('删除会话'),
+        ),
       ],
     );
     if (!context.mounted) return;
@@ -1079,6 +1088,55 @@ class _DeviceTile extends StatelessWidget {
       return '昨天 ${TimeOfDay.fromDateTime(time).format(context)} 在线';
     }
     return '${time.year}/${time.month}/${time.day} 在线';
+  }
+}
+
+class _RoundedMenuItem extends PopupMenuItem<String> {
+  const _RoundedMenuItem({
+    required super.value,
+    required super.child,
+    this.color,
+  });
+
+  final Color? color;
+
+  @override
+  PopupMenuItemState<String, _RoundedMenuItem> createState() =>
+      _RoundedMenuItemState();
+}
+
+class _RoundedMenuItemState
+    extends PopupMenuItemState<String, _RoundedMenuItem> {
+  static const _radius = BorderRadius.all(Radius.circular(7));
+
+  @override
+  Widget build(BuildContext context) {
+    final textStyle =
+        Theme.of(context).textTheme.titleMedium?.copyWith(color: widget.color);
+    return Semantics(
+      enabled: widget.enabled,
+      button: true,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: _radius,
+          child: InkWell(
+            borderRadius: _radius,
+            onTap: widget.enabled ? handleTap : null,
+            child: SizedBox(
+              height: 42,
+              child: Center(
+                child: DefaultTextStyle.merge(
+                  style: textStyle,
+                  child: buildChild() ?? const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

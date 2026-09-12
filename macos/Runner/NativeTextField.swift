@@ -23,7 +23,12 @@ final class SendHereTextView: NSTextView {
   override var acceptsFirstResponder: Bool { true }
 
   override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-    droppedFilePaths(from: sender).isEmpty ? super.draggingEntered(sender) : .copy
+    guard !droppedFilePaths(from: sender).isEmpty else {
+      return super.draggingEntered(sender)
+    }
+    NSApp.activate(ignoringOtherApps: true)
+    window?.makeKeyAndOrderFront(nil)
+    return .copy
   }
 
   override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -62,7 +67,12 @@ final class SendHereScrollView: NSScrollView {
   override var acceptsFirstResponder: Bool { true }
 
   override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-    droppedFilePaths(from: sender).isEmpty ? super.draggingEntered(sender) : .copy
+    guard !droppedFilePaths(from: sender).isEmpty else {
+      return super.draggingEntered(sender)
+    }
+    NSApp.activate(ignoringOtherApps: true)
+    window?.makeKeyAndOrderFront(nil)
+    return .copy
   }
 
   override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {

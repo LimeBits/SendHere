@@ -55,18 +55,28 @@ private final class DesktopImagePreviewController: NSObject {
     defer { image.unlockFocus() }
 
     NSColor.white.setStroke()
-    let path = NSBezierPath()
-    path.lineWidth = 2.6
-    path.lineCapStyle = .round
-    path.lineJoinStyle = .round
-    path.move(to: NSPoint(x: 15, y: 25))
-    path.line(to: NSPoint(x: 15, y: 10))
-    path.move(to: NSPoint(x: 8.5, y: 16.5))
-    path.line(to: NSPoint(x: 15, y: 10))
-    path.line(to: NSPoint(x: 21.5, y: 16.5))
-    path.move(to: NSPoint(x: 6, y: 5.5))
-    path.line(to: NSPoint(x: 24, y: 5.5))
-    path.stroke()
+    let arrow = NSBezierPath()
+    arrow.lineWidth = 4.2
+    arrow.lineCapStyle = .round
+    arrow.lineJoinStyle = .round
+    arrow.move(to: NSPoint(x: 15, y: 25))
+    arrow.line(to: NSPoint(x: 15, y: 12))
+    arrow.move(to: NSPoint(x: 8.5, y: 18.5))
+    arrow.line(to: NSPoint(x: 15, y: 12))
+    arrow.line(to: NSPoint(x: 21.5, y: 18.5))
+    arrow.stroke()
+
+    let tray = NSBezierPath()
+    tray.lineWidth = 4.2
+    tray.lineCapStyle = .round
+    tray.lineJoinStyle = .round
+    tray.move(to: NSPoint(x: 6, y: 13))
+    tray.line(to: NSPoint(x: 6, y: 7.5))
+    tray.curve(to: NSPoint(x: 8.5, y: 5.5), controlPoint1: NSPoint(x: 6, y: 6.3), controlPoint2: NSPoint(x: 6.8, y: 5.5))
+    tray.line(to: NSPoint(x: 21.5, y: 5.5))
+    tray.curve(to: NSPoint(x: 24, y: 7.5), controlPoint1: NSPoint(x: 23.2, y: 5.5), controlPoint2: NSPoint(x: 24, y: 6.3))
+    tray.line(to: NSPoint(x: 24, y: 13))
+    tray.stroke()
     image.isTemplate = false
     return image
   }
@@ -123,10 +133,8 @@ private final class DesktopImagePreviewController: NSObject {
     saveButton.imageScaling = .scaleNone
     saveButton.wantsLayer = true
     saveButton.layer?.backgroundColor = NSColor(calibratedWhite: 0.18, alpha: 0.64).cgColor
-    saveButton.layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
-    saveButton.layer?.borderWidth = 1
+    saveButton.layer?.borderWidth = 0
     saveButton.layer?.cornerRadius = 24
-    saveButton.shadow = NSShadow()
     saveButton.toolTip = "下载到本地"
     saveButton.identifier = NSUserInterfaceItemIdentifier(path)
     saveButton.frame = NSRect(x: contentView.bounds.width - 64, y: 16, width: 48, height: 48)

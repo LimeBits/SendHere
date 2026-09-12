@@ -2169,7 +2169,8 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                     onSubmitted: _submit,
                   ),
                 ),
-                const Divider(height: 1),
+                if (!Platform.isMacOS && !Platform.isWindows)
+                  const Divider(height: 1),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(6, 0, 8, 4),
                   child: Row(children: [
@@ -2193,10 +2194,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                             child: Icon(
                               Platform.isMacOS || Platform.isWindows
                                   ? Icons.folder_open_outlined
-                                  : Icons.attach_file,
+                                  : Icons.add_circle_outline,
                               size: Platform.isMacOS || Platform.isWindows
                                   ? 18
-                                  : 22,
+                                  : 25,
                             ),
                           ),
                         ),

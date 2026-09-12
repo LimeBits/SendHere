@@ -145,9 +145,12 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
     textView.insertionPointColor = .textColor
 
     scrollView.documentView = textView
-    scrollView.hasVerticalScroller = true
+    scrollView.hasVerticalScroller = false
+    scrollView.hasHorizontalScroller = false
+    scrollView.scrollerStyle = .overlay
+    scrollView.autohidesScrollers = true
     scrollView.drawsBackground = true
-    scrollView.borderType = .bezelBorder
+    scrollView.borderType = .noBorder
     scrollView.appearance = NSAppearance(named: .aqua)
 
     channel.setMethodCallHandler { [weak self] call, result in
@@ -229,6 +232,9 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
     layoutManager.ensureLayout(for: container)
     let usedHeight = layoutManager.usedRect(for: container).height
     let height = ceil(usedHeight + textView.textContainerInset.height * 2)
+    // Only reserve an overlay scroller when the editor genuinely overflows.
+    // This avoids showing an empty, legacy-looking scrollbar track for short drafts.
+    scrollView.hasVerticalScroller = height > scrollView.contentSize.height + 1
     channel.invokeMethod("contentHeightChanged", arguments: height)
   }
 

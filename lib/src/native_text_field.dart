@@ -209,14 +209,14 @@ class NativeTextFieldState extends State<NativeTextField> {
         maxLines: null,
         minLines: null,
         textAlignVertical: TextAlignVertical.top,
-        textInputAction: TextInputAction.send,
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
         decoration: const InputDecoration(
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           hintText: '输入消息',
         ),
         onChanged: widget.onChanged,
-        onSubmitted: widget.onSubmitted,
       ),
     );
   }

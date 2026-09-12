@@ -5,35 +5,100 @@ import FlutterMacOS
 /// resolved in the content-view hierarchy, so this parent view receives drops
 /// across the conversation area while Flutter retains normal input handling.
 private final class ConversationDropView: NSView {
+  private static let conversationPaneMinX: CGFloat = 316
+
   var onFilesDropped: (([String]) -> Void)?
+
+  private let dropOverlay = NSView()
+  private let dropCard = NSVisualEffectView()
+  private let dropTitle = NSTextField(labelWithString: "松手完成添加")
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
+    configureDropOverlay()
     registerForDraggedTypes([.fileURL, .URL])
   }
 
   required init?(coder: NSCoder) {
     super.init(coder: coder)
+    configureDropOverlay()
     registerForDraggedTypes([.fileURL, .URL])
   }
 
+  override func layout() {
+    super.layout()
+    let paneWidth = max(0, bounds.width - Self.conversationPaneMinX)
+    dropOverlay.frame = NSRect(
+      x: Self.conversationPaneMinX, y: 0, width: paneWidth, height: bounds.height)
+    dropCard.frame.origin = NSPoint(
+      x: (dropOverlay.bounds.width - dropCard.bounds.width) / 2,
+      y: (dropOverlay.bounds.height - dropCard.bounds.height) / 2)
+  }
+
   override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-    droppedPaths(from: sender).isEmpty ? [] : .copy
+    updateDropOverlay(for: sender)
+  }
+
+  override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+    updateDropOverlay(for: sender)
+  }
+
+  override func draggingExited(_ sender: NSDraggingInfo?) {
+    hideDropOverlay()
   }
 
   override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-    !droppedPaths(from: sender).isEmpty
+    isConversationDrop(sender) && !droppedPaths(from: sender).isEmpty
   }
 
   override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    defer { hideDropOverlay() }
     let paths = droppedPaths(from: sender)
-    guard !paths.isEmpty else { return false }
-    // The Flutter layout reserves 300pt plus a 16pt gap for the sidebar.
-    // Any position beyond it belongs to the active conversation pane.
-    let location = convert(sender.draggingLocation, from: nil)
-    guard location.x >= 316 else { return false }
+    guard !paths.isEmpty, isConversationDrop(sender) else { return false }
     onFilesDropped?(paths)
     return true
+  }
+
+  override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+    hideDropOverlay()
+  }
+
+  private func configureDropOverlay() {
+    wantsLayer = true
+    dropOverlay.wantsLayer = true
+    dropOverlay.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
+    dropOverlay.isHidden = true
+    dropOverlay.autoresizingMask = []
+    addSubview(dropOverlay, positioned: .above, relativeTo: nil)
+
+    dropCard.material = .hudWindow
+    dropCard.blendingMode = .withinWindow
+    dropCard.state = .active
+    dropCard.wantsLayer = true
+    dropCard.layer?.cornerRadius = 14
+    dropCard.layer?.masksToBounds = true
+    dropCard.frame.size = NSSize(width: 196, height: 76)
+    dropOverlay.addSubview(dropCard)
+
+    dropTitle.alignment = .center
+    dropTitle.font = .systemFont(ofSize: 17, weight: .semibold)
+    dropTitle.textColor = .labelColor
+    dropTitle.frame = NSRect(x: 16, y: 26, width: 164, height: 24)
+    dropCard.addSubview(dropTitle)
+  }
+
+  private func updateDropOverlay(for sender: NSDraggingInfo) -> NSDragOperation {
+    let acceptsDrop = !droppedPaths(from: sender).isEmpty && isConversationDrop(sender)
+    dropOverlay.isHidden = !acceptsDrop
+    return acceptsDrop ? .copy : []
+  }
+
+  private func isConversationDrop(_ sender: NSDraggingInfo) -> Bool {
+    convert(sender.draggingLocation, from: nil).x >= Self.conversationPaneMinX
+  }
+
+  private func hideDropOverlay() {
+    dropOverlay.isHidden = true
   }
 
   private func droppedPaths(from sender: NSDraggingInfo) -> [String] {
@@ -56,26 +121,26 @@ private final class DesktopImagePreviewController: NSObject {
 
     NSColor.white.setStroke()
     let arrow = NSBezierPath()
-    arrow.lineWidth = 4.2
+    arrow.lineWidth = 2.5
     arrow.lineCapStyle = .round
     arrow.lineJoinStyle = .round
-    arrow.move(to: NSPoint(x: 15, y: 25))
+    arrow.move(to: NSPoint(x: 15, y: 24))
     arrow.line(to: NSPoint(x: 15, y: 12))
-    arrow.move(to: NSPoint(x: 8.5, y: 18.5))
+    arrow.move(to: NSPoint(x: 9, y: 18))
     arrow.line(to: NSPoint(x: 15, y: 12))
-    arrow.line(to: NSPoint(x: 21.5, y: 18.5))
+    arrow.line(to: NSPoint(x: 21, y: 18))
     arrow.stroke()
 
     let tray = NSBezierPath()
-    tray.lineWidth = 4.2
+    tray.lineWidth = 2.5
     tray.lineCapStyle = .round
     tray.lineJoinStyle = .round
-    tray.move(to: NSPoint(x: 6, y: 13))
-    tray.line(to: NSPoint(x: 6, y: 7.5))
-    tray.curve(to: NSPoint(x: 8.5, y: 5.5), controlPoint1: NSPoint(x: 6, y: 6.3), controlPoint2: NSPoint(x: 6.8, y: 5.5))
+    tray.move(to: NSPoint(x: 6.5, y: 13))
+    tray.line(to: NSPoint(x: 6.5, y: 7.5))
+    tray.curve(to: NSPoint(x: 8.5, y: 5.5), controlPoint1: NSPoint(x: 6.5, y: 6.4), controlPoint2: NSPoint(x: 7.4, y: 5.5))
     tray.line(to: NSPoint(x: 21.5, y: 5.5))
-    tray.curve(to: NSPoint(x: 24, y: 7.5), controlPoint1: NSPoint(x: 23.2, y: 5.5), controlPoint2: NSPoint(x: 24, y: 6.3))
-    tray.line(to: NSPoint(x: 24, y: 13))
+    tray.curve(to: NSPoint(x: 23.5, y: 7.5), controlPoint1: NSPoint(x: 22.6, y: 5.5), controlPoint2: NSPoint(x: 23.5, y: 6.4))
+    tray.line(to: NSPoint(x: 23.5, y: 13))
     tray.stroke()
     image.isTemplate = false
     return image
@@ -210,7 +275,7 @@ private final class ConversationContainerController: NSViewController {
     let flutterView = flutterViewController.view
     flutterView.frame = dropView.bounds
     flutterView.autoresizingMask = [.width, .height]
-    dropView.addSubview(flutterView)
+    dropView.addSubview(flutterView, positioned: .below, relativeTo: dropView.subviews.first)
   }
 }
 

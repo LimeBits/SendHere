@@ -112,9 +112,13 @@ function showImagePreview(source, name) {
   download.href = source;
   download.download = name;
   download.setAttribute('aria-label', '下载图片');
-  const downloadIcon = document.createElement('span');
-  downloadIcon.className = 'download-glyph';
+  const downloadIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  downloadIcon.classList.add('download-glyph');
+  downloadIcon.setAttribute('viewBox', '0 0 24 24');
   downloadIcon.setAttribute('aria-hidden', 'true');
+  const downloadPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  downloadPath.setAttribute('d', 'M19 9h-4V3H9v6H5l7 7 7-7zm-7 4.17L9.83 11H11V5h2v6h1.17L12 13.17zM5 19v-2h14v2H5z');
+  downloadIcon.append(downloadPath);
   download.append(downloadIcon);
   let dragStartY;
   const dismiss = () => overlay.remove();

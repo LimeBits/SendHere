@@ -74,12 +74,10 @@ textarea::placeholder { color: #a6a9b0; }
 
 .image-preview { position: fixed; inset: 0; z-index: 10; display: flex; justify-content: center; align-items: flex-start; padding: max(58px, calc(env(safe-area-inset-top) + 8px)) 18px max(72px, calc(env(safe-area-inset-bottom) + 52px)); background: rgba(0, 0, 0, .9); }
 .image-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.preview-close, .preview-download { -webkit-appearance: none; appearance: none; position: absolute; display: grid; place-items: center; width: 48px; height: 48px; min-width: 48px; min-height: 48px; margin: 0; padding: 0; border: 0; border-radius: 50%; color: #fff; background: rgba(45, 45, 48, .64); box-shadow: none; font-family: inherit; font-size: 34px; font-weight: 400; line-height: 48px; text-align: center; text-decoration: none; }
-.preview-close { top: max(6px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right)); }
-.preview-download { right: max(16px, env(safe-area-inset-right)); bottom: max(16px, calc(env(safe-area-inset-bottom) + 10px)); }
-.download-glyph { position: relative; display: block; width: 30px; height: 30px; background: linear-gradient(#fff, #fff) center 1px / 4px 15px no-repeat; }
-.download-glyph::before { content: ""; position: absolute; top: 9px; left: 9px; width: 12px; height: 12px; border-right: 4px solid #fff; border-bottom: 4px solid #fff; border-radius: 1px; transform: rotate(45deg); }
-.download-glyph::after { content: ""; position: absolute; bottom: 2px; left: 2px; width: 26px; height: 11px; border: 4px solid #fff; border-top: 0; border-radius: 0 0 4px 4px; }
+.preview-close, .preview-download { -webkit-appearance: none; appearance: none; position: absolute; display: grid; place-items: center; margin: 0; padding: 0; border: 0; border-radius: 50%; color: #fff; background: rgba(45, 45, 48, .64); box-shadow: none; font-family: inherit; font-weight: 400; text-align: center; text-decoration: none; }
+.preview-close { top: max(6px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right)); width: 44px; height: 44px; min-width: 44px; min-height: 44px; font-size: 31px; line-height: 44px; }
+.preview-download { right: max(16px, env(safe-area-inset-right)); bottom: max(16px, calc(env(safe-area-inset-bottom) + 10px)); width: 48px; height: 48px; min-width: 48px; min-height: 48px; }
+.download-glyph { display: block; width: 30px; height: 30px; fill: currentColor; }
 .preview-close:active, .preview-download:active { background: rgba(35, 35, 38, .82); }
 
 .expired-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }

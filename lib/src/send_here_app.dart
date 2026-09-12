@@ -1176,6 +1176,8 @@ class _SendHereHomeState extends State<SendHereHome>
                       openNotificationSettings: _openNotificationSettings,
                     );
                     final conversation = _ConversationPanel(
+                      key:
+                          ValueKey('conversation-${_selectedPeerId ?? 'none'}'),
                       controller: _textController,
                       events: _events,
                       sendPending: _sendPending,
@@ -1908,6 +1910,7 @@ class _PhoneConnectCard extends StatelessWidget {
 
 class _ConversationPanel extends StatefulWidget {
   const _ConversationPanel({
+    super.key,
     required this.controller,
     required this.events,
     required this.sendPending,
@@ -1964,12 +1967,14 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   double _backDragOffset = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _scrollToLatestAfterLayout();
+  }
+
+  @override
   void didUpdateWidget(covariant _ConversationPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // New incoming/outgoing records are prepended in app state, but rendered
-    // oldest-to-newest. A conversation transition or an image/file layout can
-    // change maxScrollExtent after the first frame, so settle at the bottom on
-    // two consecutive frames rather than leaving the user at an older bubble.
     _scrollToLatestAfterLayout();
   }
 
@@ -1984,7 +1989,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
 
   void _scrollToBottom({bool animate = true}) {
     if (!_scrollController.hasClients) return;
-    final offset = _scrollController.position.maxScrollExtent;
+    final offset = _scrollController.position.minScrollExtent;
     if (!animate) {
       _scrollController.jumpTo(offset);
       return;
@@ -2048,8 +2053,6 @@ class _ConversationPanelState extends State<_ConversationPanel> {
             event.deviceId == peerId &&
             event.type != TransferEventType.clientConnected &&
             event.type != TransferEventType.clientDisconnected)
-        .toList()
-        .reversed
         .toList();
     return Listener(
       behavior: HitTestBehavior.translucent,
@@ -2117,6 +2120,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                       )
                     : ListView.builder(
                         controller: _scrollController,
+                        reverse: true,
                         padding: const EdgeInsets.all(18),
                         itemCount: messages.length,
                         itemBuilder: (_, index) => _MessageBubble(

@@ -1966,16 +1966,31 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   @override
   void didUpdateWidget(covariant _ConversationPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // New incoming/outgoing records are prepended in the app state, but the
-    // conversation is rendered oldest-to-newest. Keep the latest message in
-    // view after a send, receive, or selected-device switch.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    // New incoming/outgoing records are prepended in app state, but rendered
+    // oldest-to-newest. A conversation transition or an image/file layout can
+    // change maxScrollExtent after the first frame, so settle at the bottom on
+    // two consecutive frames rather than leaving the user at an older bubble.
+    _scrollToLatestAfterLayout();
   }
 
-  void _scrollToBottom() {
+  void _scrollToLatestAfterLayout() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToBottom(animate: false);
+      });
+    });
+  }
+
+  void _scrollToBottom({bool animate = true}) {
     if (!_scrollController.hasClients) return;
+    final offset = _scrollController.position.maxScrollExtent;
+    if (!animate) {
+      _scrollController.jumpTo(offset);
+      return;
+    }
     _scrollController.animateTo(
-      _scrollController.position.maxScrollExtent,
+      offset,
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
     );
@@ -2158,13 +2173,34 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(6, 0, 8, 4),
                   child: Row(children: [
-                    IconButton(
-                      tooltip: '发送文件',
-                      onPressed: () async {
-                        await widget.offerFiles();
-                        if (Platform.isMacOS) _focusInput();
-                      },
-                      icon: const Icon(Icons.attach_file),
+                    Tooltip(
+                      message: '添加附件',
+                      child: Material(
+                        color: Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          hoverColor: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
+                          onTap: () async {
+                            await widget.offerFiles();
+                            if (Platform.isMacOS) _focusInput();
+                          },
+                          child: SizedBox(
+                            width: 34,
+                            height: 32,
+                            child: Icon(
+                              Platform.isMacOS || Platform.isWindows
+                                  ? Icons.folder_open_outlined
+                                  : Icons.attach_file,
+                              size: Platform.isMacOS || Platform.isWindows
+                                  ? 18
+                                  : 22,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                     const Spacer(),
                     FilledButton.icon(

@@ -28,7 +28,10 @@ function renderDeviceName() {
 }
 
 function scrollToLatest() {
-  requestAnimationFrame(() => { messages.scrollTop = messages.scrollHeight; });
+  requestAnimationFrame(() => {
+    messages.scrollTop = messages.scrollHeight;
+    requestAnimationFrame(() => { messages.scrollTop = messages.scrollHeight; });
+  });
 }
 
 function showMessage(node) {
@@ -89,7 +92,9 @@ function imageContent(name, source) {
   image.className = 'image-thumbnail';
   image.src = source;
   image.alt = name;
-  image.loading = 'lazy';
+  image.loading = 'eager';
+  image.onload = scrollToLatest;
+  image.onerror = scrollToLatest;
   image.onclick = () => showImagePreview(source, name);
   const label = document.createElement('div');
   label.className = 'image-name';

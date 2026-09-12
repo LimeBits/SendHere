@@ -80,6 +80,27 @@ Future<void> _saveImageToDevice(
   }
 }
 
+Future<void> _copyImageToClipboard(
+  BuildContext context,
+  String filePath,
+) async {
+  if (!Platform.isMacOS) return;
+  try {
+    await _imagePreviewChannel.invokeMethod<void>('copy', {'path': filePath});
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('图片已复制，可粘贴到其他应用')),
+      );
+    }
+  } on PlatformException catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message ?? '无法复制图片')),
+      );
+    }
+  }
+}
+
 Future<void> _showImageActions(
   BuildContext context,
   String filePath,
@@ -100,9 +121,13 @@ Future<void> _showImageActions(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       menuPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
       items: const [
+        _RoundedMenuItem(value: 'copy', child: Text('复制图片')),
         _RoundedMenuItem(value: 'save', child: Text('下载到本地')),
       ],
     );
+    if (action == 'copy' && context.mounted) {
+      await _copyImageToClipboard(context, filePath);
+    }
     if (action == 'save' && context.mounted) {
       await _saveImageToDevice(context, filePath, fileName);
     }

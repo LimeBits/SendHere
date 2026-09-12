@@ -119,6 +119,21 @@ private final class DesktopImagePreviewController: NSObject {
     save(path: path)
   }
 
+  func copy(path: String) throws {
+    guard let image = NSImage(contentsOfFile: path) else {
+      throw NSError(
+        domain: "SendHere.ImagePreview", code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "无法读取图片文件"])
+    }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    guard pasteboard.writeObjects([image]) else {
+      throw NSError(
+        domain: "SendHere.ImagePreview", code: 3,
+        userInfo: [NSLocalizedDescriptionKey: "无法写入系统剪贴板"])
+    }
+  }
+
   func save(path: String) {
     let panel = NSSavePanel()
     panel.nameFieldStringValue = URL(fileURLWithPath: path).lastPathComponent
@@ -233,6 +248,13 @@ class MainFlutterWindow: NSWindow {
           result(nil)
         } catch {
           result(FlutterError(code: "image_unavailable", message: error.localizedDescription, details: path))
+        }
+      case "copy":
+        do {
+          try DesktopImagePreviewController.shared.copy(path: path)
+          result(nil)
+        } catch {
+          result(FlutterError(code: "image_copy_failed", message: error.localizedDescription, details: path))
         }
       case "save":
         guard FileManager.default.fileExists(atPath: path) else {

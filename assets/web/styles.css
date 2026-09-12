@@ -72,7 +72,7 @@ textarea::placeholder { color: #a6a9b0; }
 .send-button:disabled { background: #aeb7df; cursor: default; }
 .transfer-status { min-height: 14px; padding: 4px 4px 0; color: #777c86; font-size: 11px; }
 
-.image-preview { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: max(60px, calc(env(safe-area-inset-top) + 20px)) 18px max(72px, calc(env(safe-area-inset-bottom) + 52px)); background: rgba(0, 0, 0, .9); }
+.image-preview { position: fixed; inset: 0; z-index: 10; display: flex; justify-content: center; align-items: flex-start; padding: max(58px, calc(env(safe-area-inset-top) + 8px)) 18px max(72px, calc(env(safe-area-inset-bottom) + 52px)); background: rgba(0, 0, 0, .9); }
 .image-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .preview-close, .preview-download { -webkit-appearance: none; appearance: none; position: absolute; display: grid; place-items: center; width: 40px; height: 40px; min-width: 40px; min-height: 40px; margin: 0; padding: 0; border: 0; border-radius: 999px; color: #fff; background: rgba(255, 255, 255, .22); box-shadow: none; font-family: inherit; font-size: 27px; font-weight: 400; line-height: 40px; text-align: center; text-decoration: none; }
 .preview-close { top: max(12px, calc(env(safe-area-inset-top) + 4px)); right: max(16px, env(safe-area-inset-right)); }

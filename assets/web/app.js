@@ -18,6 +18,8 @@ if (!browserId) {
 const isWeChat = /MicroMessenger/i.test(navigator.userAgent);
 const isIPhone = /iPhone/i.test(navigator.userAgent);
 const clientName = `${isWeChat ? '微信 ' : ''}${isIPhone ? 'iPhone' : '手机'} · ${browserId.slice(-4)}`;
+const historyKey = `sendhere-chat-history:${token}:${browserId}`;
+const historyLimit = 100;
 let socket;
 let reconnectTimer;
 let heartbeatTimer;
@@ -34,10 +36,37 @@ function scrollToLatest() {
   });
 }
 
-function showMessage(node) {
+function showMessage(node, entry) {
   emptyState?.remove();
   messages.append(node);
+  if (entry) saveHistoryEntry(entry);
   scrollToLatest();
+}
+
+function loadHistory() {
+  try {
+    return JSON.parse(sessionStorage.getItem(historyKey) || '[]');
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveHistoryEntry(entry) {
+  const entries = loadHistory();
+  entries.push(entry);
+  sessionStorage.setItem(historyKey, JSON.stringify(entries.slice(-historyLimit)));
+}
+
+function restoreHistory() {
+  for (const entry of loadHistory()) {
+    if (entry.type === 'text') {
+      const content = textContent(entry.text);
+      showMessage(messageBubble({ direction: entry.direction, content, meta: entry.meta }));
+    } else if (entry.type === 'file') {
+      const content = fileContent(entry.name, entry.downloadPath);
+      showMessage(messageBubble({ direction: entry.direction, content, meta: entry.meta }));
+    }
+  }
 }
 
 function messageBubble({ direction, content, meta }) {
@@ -84,8 +113,16 @@ function showImagePreview(source, name) {
   download.download = name;
   download.setAttribute('aria-label', '下载图片');
   download.textContent = '⇩';
+  let dragStartY;
   const dismiss = () => overlay.remove();
   close.onclick = dismiss;
+  image.onclick = dismiss;
+  image.onpointerdown = event => { dragStartY = event.clientY; };
+  image.onpointerup = event => {
+    if (dragStartY != null && event.clientY - dragStartY > 90) dismiss();
+    dragStartY = undefined;
+  };
+  image.onpointercancel = () => { dragStartY = undefined; };
   overlay.onclick = event => {
     if (event.target === overlay) dismiss();
   };
@@ -137,26 +174,32 @@ function fileContent(name, downloadPath) {
 }
 
 function addIncomingText(value) {
-  showMessage(messageBubble({ direction: 'incoming', content: textContent(value) }));
+  showMessage(messageBubble({ direction: 'incoming', content: textContent(value) }), {
+    type: 'text', direction: 'incoming', text: value,
+  });
 }
 
 function addIncomingFile(name, downloadPath) {
+  const meta = '电脑发来的文件';
   showMessage(messageBubble({
-    direction: 'incoming',
-    content: fileContent(name, downloadPath),
-    meta: '电脑发来的文件',
-  }));
+    direction: 'incoming', content: fileContent(name, downloadPath), meta,
+  }), { type: 'file', direction: 'incoming', name, downloadPath, meta });
 }
 
 function addOutgoingText(value) {
-  showMessage(messageBubble({ direction: 'outgoing', content: textContent(value), meta: '已发送' }));
+  const meta = '已发送';
+  showMessage(messageBubble({ direction: 'outgoing', content: textContent(value), meta }), {
+    type: 'text', direction: 'outgoing', text: value, meta,
+  });
 }
 
 function addOutgoingFile(file, state = '已发送') {
   const content = isImage(file.name)
     ? imageContent(file.name, URL.createObjectURL(file))
     : fileContent(file.name);
-  showMessage(messageBubble({ direction: 'outgoing', content, meta: state }));
+  showMessage(messageBubble({ direction: 'outgoing', content, meta: state }), {
+    type: 'file', direction: 'outgoing', name: file.name, meta: state,
+  });
 }
 
 function showExpired() {
@@ -325,4 +368,5 @@ document.addEventListener('visibilitychange', () => {
 });
 
 renderDeviceName();
+restoreHistory();
 connectSocket();

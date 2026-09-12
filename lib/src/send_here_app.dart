@@ -579,12 +579,25 @@ class _SendHereHomeState extends State<SendHereHome>
           }
           if (event.deviceId != null && event.clientName != null) {
             if (event.type == TransferEventType.clientConnected) {
-              _connectedPeers[event.deviceId!] = _PeerDevice(
-                  id: event.deviceId!,
+              final deviceId = event.deviceId!;
+              final isNewPhoneConnection = !event.isComputerPeer &&
+                  !_connectedPeers.containsKey(deviceId);
+              _connectedPeers[deviceId] = _PeerDevice(
+                  id: deviceId,
                   name: event.clientName!,
                   online: true,
                   lastSeenAt: DateTime.now());
-              _selectedPeerId ??= event.deviceId;
+              // A phone browser is a newly added device when it first identifies
+              // over the QR session. Open its conversation immediately; later
+              // reconnects and computer peers must not steal the active chat.
+              if (isNewPhoneConnection || _selectedPeerId == null) {
+                final previousId = _selectedPeerId;
+                if (previousId != null) {
+                  _drafts[previousId] = _textController.text;
+                }
+                _selectedPeerId = deviceId;
+                _textController.text = _drafts[deviceId] ?? '';
+              }
             } else if (event.type == TransferEventType.clientDisconnected) {
               final device = _connectedPeers[event.deviceId!];
               if (device != null) {

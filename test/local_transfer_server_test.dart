@@ -105,6 +105,53 @@ void main() {
     expect(await uploaded.readAsBytes(), [1, 2, 3, 4]);
   });
 
+  test('sends desktop text and file notifications to an identified phone',
+      () async {
+    final directory = await Directory.systemTemp.createTemp('sendhere-test-');
+    final server = LocalTransferServer(
+      downloadDirectory: directory,
+      loadAsset: (asset) => File(asset).readAsBytes(),
+    );
+    addTearDown(() async {
+      await server.stop();
+      await directory.delete(recursive: true);
+    });
+
+    await server.start();
+    final socket = await WebSocket.connect(
+      'ws://127.0.0.1:${server.port}/ws?token=${server.token}',
+    );
+    addTearDown(socket.close);
+    final messages = socket
+        .map((message) => jsonDecode(message as String) as Map<String, dynamic>)
+        .asBroadcastStream();
+    final connected = server.events.firstWhere((event) =>
+        event.type == TransferEventType.clientConnected &&
+        event.deviceId == 'phone-browser');
+    socket.add(jsonEncode({
+      'type': 'identify',
+      'name': '测试手机',
+      'id': 'phone-browser',
+    }));
+    await connected;
+    expect(server.connectedPhoneCount, 1);
+
+    final textMessage =
+        messages.firstWhere((message) => message['type'] == 'desktop_text');
+    server.sendTextToPhone('电脑发来的文字');
+    expect((await textMessage)['text'], '电脑发来的文字');
+
+    final source =
+        File('${directory.path}${Platform.pathSeparator}from-desktop.txt');
+    await source.writeAsString('download me');
+    final fileMessage =
+        messages.firstWhere((message) => message['type'] == 'desktop_file');
+    await server.offerFileToPhone(source);
+    final file = await fileMessage;
+    expect(file['fileName'], 'from-desktop.txt');
+    expect(file['downloadPath'], startsWith('/api/download/'));
+  });
+
   test('keeps a desktop file available for a phone download', () async {
     final directory = await Directory.systemTemp.createTemp('sendhere-test-');
     final source = File('${directory.path}${Platform.pathSeparator}share.txt');

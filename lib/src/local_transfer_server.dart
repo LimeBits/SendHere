@@ -49,7 +49,7 @@ class LocalTransferServer {
   int get port => _server?.port ?? 0;
   int get connectedDeviceCount => _clients.length;
   int get connectedPhoneCount =>
-      _sockets.where((socket) => !_clientIds.containsKey(socket)).length;
+      _sockets.where((socket) => !_isPeerSocket(socket)).length;
   String get connectedDeviceNames {
     final names = _clients.values.where((name) => name != '手机').toSet();
     return names.isEmpty ? '已连接设备' : names.join('、');
@@ -769,12 +769,16 @@ class LocalTransferServer {
     });
   }
 
+  bool _isPeerSocket(WebSocketChannel socket) =>
+      _peerSockets.values.contains(socket);
+
   void _broadcast(Map<String, dynamic> payload) {
     final message = jsonEncode(payload);
     for (final socket in _sockets.toList()) {
-      // Phone sessions retain the existing broadcast behavior. Desktop peers
-      // are private conversations and must only receive targeted messages.
-      if (!_clientIds.containsKey(socket)) socket.sink.add(message);
+      // An identified phone has a device ID too. Only desktop peer sockets must
+      // be excluded from phone broadcasts; using _clientIds here previously
+      // discarded every normally identified browser session.
+      if (!_isPeerSocket(socket)) socket.sink.add(message);
     }
   }
 

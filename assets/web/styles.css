@@ -74,11 +74,11 @@ textarea::placeholder { color: #a6a9b0; }
 
 .image-preview { position: fixed; inset: 0; z-index: 10; display: flex; justify-content: center; align-items: flex-start; padding: max(58px, calc(env(safe-area-inset-top) + 8px)) 18px max(72px, calc(env(safe-area-inset-bottom) + 52px)); background: rgba(0, 0, 0, .9); }
 .image-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.preview-close, .preview-download { -webkit-appearance: none; appearance: none; position: absolute; display: grid; place-items: center; width: 48px; height: 48px; min-width: 48px; min-height: 48px; margin: 0; padding: 0; border: 0; border-radius: 999px; color: #fff; background: rgba(255, 255, 255, .25); box-shadow: none; font-family: inherit; font-size: 34px; font-weight: 400; line-height: 48px; text-align: center; text-decoration: none; }
+.preview-close, .preview-download { -webkit-appearance: none; appearance: none; position: absolute; display: grid; place-items: center; width: 48px; height: 48px; min-width: 48px; min-height: 48px; margin: 0; padding: 0; border: 1px solid rgba(255, 255, 255, .32); border-radius: 999px; color: #fff; background: rgba(45, 45, 48, .64); box-shadow: 0 3px 10px rgba(0, 0, 0, .28); font-family: inherit; font-size: 34px; font-weight: 400; line-height: 48px; text-align: center; text-decoration: none; }
 .preview-close { top: max(12px, calc(env(safe-area-inset-top) + 4px)); right: max(16px, env(safe-area-inset-right)); }
 .preview-download { right: max(16px, env(safe-area-inset-right)); bottom: max(16px, calc(env(safe-area-inset-bottom) + 10px)); }
 .preview-download img { display: block; width: 29px; height: 29px; filter: brightness(0) invert(1); }
-.preview-close:active, .preview-download:active { background: rgba(255, 255, 255, .4); }
+.preview-close:active, .preview-download:active { background: rgba(35, 35, 38, .82); }
 
 .expired-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
 .card { width: min(100%, 460px); padding: 30px 22px; border: 1px solid #e1e5ee; border-radius: 16px; background: white; box-shadow: 0 2px 10px #23345a0a; }

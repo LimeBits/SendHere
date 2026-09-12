@@ -101,8 +101,11 @@ private final class DesktopImagePreviewController: NSObject {
     saveButton.isBordered = false
     saveButton.contentTintColor = .white
     saveButton.wantsLayer = true
-    saveButton.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.25).cgColor
+    saveButton.layer?.backgroundColor = NSColor(calibratedWhite: 0.18, alpha: 0.64).cgColor
+    saveButton.layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
+    saveButton.layer?.borderWidth = 1
     saveButton.layer?.cornerRadius = 24
+    saveButton.shadow = NSShadow()
     saveButton.toolTip = "下载到本地"
     saveButton.identifier = NSUserInterfaceItemIdentifier(path)
     saveButton.frame = NSRect(x: contentView.bounds.width - 64, y: 16, width: 48, height: 48)

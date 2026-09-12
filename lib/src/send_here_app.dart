@@ -273,7 +273,7 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
               child: Padding(
                 padding: const EdgeInsets.all(18),
                 child: Material(
-                  color: Colors.white24,
+                  color: const Color(0xA32D2D30),
                   shape: const CircleBorder(),
                   child: InkWell(
                     customBorder: const CircleBorder(),

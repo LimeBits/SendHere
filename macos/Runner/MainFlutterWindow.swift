@@ -91,15 +91,18 @@ private final class DesktopImagePreviewController: NSObject {
     imageView.imageAlignment = .alignCenter
     imageView.autoresizingMask = [.width, .height]
     contentView.addSubview(imageView)
+    let downloadSymbol = NSImage(
+      systemSymbolName: "arrow.down.to.line",
+      accessibilityDescription: "下载到本地")?.withSymbolConfiguration(
+        NSImage.SymbolConfiguration(pointSize: 30, weight: .medium)) ?? NSImage()
     let saveButton = NSButton(
-      image: NSImage(
-        systemSymbolName: "arrow.down.to.line",
-        accessibilityDescription: "下载到本地") ?? NSImage(),
+      image: downloadSymbol,
       target: self,
       action: #selector(saveFromPreview(_:)))
     saveButton.bezelStyle = .regularSquare
     saveButton.isBordered = false
     saveButton.contentTintColor = .white
+    saveButton.imageScaling = .scaleProportionallyUpOrDown
     saveButton.wantsLayer = true
     saveButton.layer?.backgroundColor = NSColor(calibratedWhite: 0.18, alpha: 0.64).cgColor
     saveButton.layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor

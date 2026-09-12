@@ -106,7 +106,11 @@ function showImagePreview(source, name) {
   close.type = 'button';
   close.className = 'preview-close';
   close.setAttribute('aria-label', '关闭预览');
-  close.textContent = '×';
+  const closeGlyph = document.createElement('span');
+  closeGlyph.className = 'close-glyph';
+  closeGlyph.setAttribute('aria-hidden', 'true');
+  closeGlyph.textContent = '×';
+  close.append(closeGlyph);
   const download = document.createElement('a');
   download.className = 'preview-download';
   download.href = source;
@@ -129,7 +133,7 @@ function showImagePreview(source, name) {
   const arrowHead = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
   arrowHead.setAttribute('points', '7.5 10,12 14.5,16.5 10');
   const tray = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  tray.setAttribute('d', 'M5.5 15.5v3.2c0 1 .8 1.8 1.8 1.8h9.4c1 0 1.8-.8 1.8-1.8v-3.2');
+  tray.setAttribute('d', 'M5.5 16.5v2c0 .6.5 1 1 1h11c.6 0 1-.5 1-1v-2');
   downloadIcon.append(arrowStem, arrowHead, tray);
   download.append(downloadIcon);
   let dragStartY;

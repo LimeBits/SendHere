@@ -580,17 +580,17 @@ class _SendHereHomeState extends State<SendHereHome>
           if (event.deviceId != null && event.clientName != null) {
             if (event.type == TransferEventType.clientConnected) {
               final deviceId = event.deviceId!;
-              final isNewPhoneConnection = !event.isComputerPeer &&
-                  !_connectedPeers.containsKey(deviceId);
+              final shouldOpenPhoneConversation = !event.isComputerPeer;
               _connectedPeers[deviceId] = _PeerDevice(
                   id: deviceId,
                   name: event.clientName!,
                   online: true,
                   lastSeenAt: DateTime.now());
-              // A phone browser is a newly added device when it first identifies
-              // over the QR session. Open its conversation immediately; later
-              // reconnects and computer peers must not steal the active chat.
-              if (isNewPhoneConnection || _selectedPeerId == null) {
+              // Every QR browser identification represents a user opening a
+              // phone session. It may reuse an ID from the recent-device list,
+              // so select it even when that historical conversation already
+              // exists. Computer peers must not steal the active chat.
+              if (shouldOpenPhoneConversation || _selectedPeerId == null) {
                 final previousId = _selectedPeerId;
                 if (previousId != null) {
                   _drafts[previousId] = _textController.text;

@@ -81,6 +81,31 @@ Future<void> _saveImageToDevice(
   }
 }
 
+void _showTopToast(BuildContext context, String message) {
+  final overlay = Overlay.of(context);
+  final entry = OverlayEntry(
+    builder: (_) => Positioned(
+      top: MediaQuery.paddingOf(context).top + 18,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: Material(
+            color: Colors.black87,
+            borderRadius: BorderRadius.circular(18),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Text(message, style: const TextStyle(color: Colors.white)),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  overlay.insert(entry);
+  Future<void>.delayed(const Duration(seconds: 2), entry.remove);
+}
+
 Future<void> _copyImageToClipboard(
   BuildContext context,
   String filePath,
@@ -88,11 +113,7 @@ Future<void> _copyImageToClipboard(
   if (!Platform.isMacOS) return;
   try {
     await _imagePreviewChannel.invokeMethod<void>('copy', {'path': filePath});
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('图片已复制，可粘贴到其他应用')),
-      );
-    }
+    if (context.mounted) _showTopToast(context, '图片已复制');
   } on PlatformException catch (error) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

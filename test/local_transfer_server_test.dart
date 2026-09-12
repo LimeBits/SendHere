@@ -132,6 +132,60 @@ void main() {
     expect(await File(event.localPath!).readAsString(), 'available to phone');
   });
 
+  test('delivers a file immediately after a peer connection is established',
+      () async {
+    final senderDirectory =
+        await Directory.systemTemp.createTemp('sendhere-sender-');
+    final receiverDirectory =
+        await Directory.systemTemp.createTemp('sendhere-receiver-');
+    final sender = LocalTransferServer(
+      downloadDirectory: senderDirectory,
+      deviceName: '发送电脑',
+      loadAsset: (asset) => File(asset).readAsBytes(),
+    );
+    final receiver = LocalTransferServer(
+      downloadDirectory: receiverDirectory,
+      deviceName: '接收电脑',
+      loadAsset: (asset) => File(asset).readAsBytes(),
+    );
+    addTearDown(() async {
+      await sender.stop();
+      await receiver.stop();
+      await senderDirectory.delete(recursive: true);
+      await receiverDirectory.delete(recursive: true);
+    });
+
+    await sender.start();
+    await receiver.start();
+    sender.setLocalEndpoint(address: '127.0.0.1', deviceId: 'sender-device');
+    receiver.setLocalEndpoint(
+        address: '127.0.0.1', deviceId: 'receiver-device');
+    final source =
+        File('${senderDirectory.path}${Platform.pathSeparator}ready.txt');
+    await source.writeAsString('file transfer is ready');
+    final received = receiver.events.firstWhere((event) =>
+        event.type == TransferEventType.file &&
+        event.direction == TransferDirection.received &&
+        event.deviceId == 'sender-device');
+
+    await sender.connectToPeer(
+      deviceId: 'receiver-device',
+      deviceName: '接收电脑',
+      address: '127.0.0.1',
+      peerPort: receiver.port,
+      localDeviceId: 'sender-device',
+    );
+    await sender.offerFileToDevice('receiver-device', source);
+
+    final event = await received.timeout(const Duration(seconds: 10));
+    expect(event.fileName, 'ready.txt');
+    expect(
+      await File('${receiverDirectory.path}${Platform.pathSeparator}ready.txt')
+          .readAsString(),
+      'file transfer is ready',
+    );
+  });
+
   test('peer session token does not replace the QR token', () async {
     final directory = await Directory.systemTemp.createTemp('sendhere-test-');
     final server = LocalTransferServer(

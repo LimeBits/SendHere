@@ -33,6 +33,7 @@ class LocalTransferServer {
   final _peerTokens = <String, DateTime>{};
   final _peerSockets = <String, WebSocketChannel>{};
   final _peerSessions = <String, _PeerSession>{};
+  final _peerSessionRequests = <String, Future<_PeerSession?>>{};
   final _peerEndpoints = <String, _PeerEndpoint>{};
   String? _localAddress;
   String? _localDeviceId;
@@ -92,6 +93,7 @@ class LocalTransferServer {
     _clientIds.clear();
     _peerSockets.clear();
     _peerSessions.clear();
+    _peerSessionRequests.clear();
     _peerTokens.clear();
     await _server?.close(force: true);
     _server = null;
@@ -399,7 +401,22 @@ class LocalTransferServer {
     if (existing != null && DateTime.now().isBefore(existing.expiresAt)) {
       return existing;
     }
+    final pending = _peerSessionRequests[deviceId];
+    if (pending != null) return pending;
+
     _peerSessions.remove(deviceId);
+    final request = _createPeerUploadSession(deviceId);
+    _peerSessionRequests[deviceId] = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_peerSessionRequests[deviceId], request)) {
+        _peerSessionRequests.remove(deviceId);
+      }
+    }
+  }
+
+  Future<_PeerSession?> _createPeerUploadSession(String deviceId) async {
     final endpoint = _peerEndpoints[deviceId];
     if (endpoint == null) return null;
     final client = HttpClient();
@@ -414,17 +431,25 @@ class LocalTransferServer {
       if (response.statusCode != HttpStatus.ok) return null;
       final body =
           jsonDecode(await utf8.decodeStream(response)) as Map<String, dynamic>;
+      final token = body['token'] as String?;
+      if (token == null || token.isEmpty) return null;
       final session = _PeerSession(
         deviceId: deviceId,
         deviceName: endpoint.deviceName,
         senderDeviceId: endpoint.localDeviceId,
         baseUri:
             Uri(scheme: 'http', host: endpoint.address, port: endpoint.port),
-        token: body['token'] as String,
+        token: token,
         expiresAt: DateTime.now().add(const Duration(minutes: 4)),
       );
       _peerSessions[deviceId] = session;
       return session;
+    } on SocketException {
+      return null;
+    } on HttpException {
+      return null;
+    } on FormatException {
+      return null;
     } finally {
       client.close(force: true);
     }

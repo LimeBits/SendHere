@@ -1,26 +1,129 @@
-:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172033; background: #f5f7fb; }
-* { box-sizing: border-box; }
-body { margin: 0; padding: 20px 16px 40px; }
-main { max-width: 620px; margin: auto; }
-header { display: flex; align-items: center; gap: 12px; margin: 8px 2px 20px; }
-.mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: #4256d6; color: white; font-size: 25px; }
-h1, h2, p { margin: 0; } h1 { font-size: 22px; } h2 { font-size: 17px; } header p, .muted { color: #687184; font-size: 14px; margin-top: 3px; }
-.section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.card { background: white; border: 1px solid #e1e5ee; border-radius: 16px; padding: 18px; margin-bottom: 14px; box-shadow: 0 2px 10px #23345a0a; }
-textarea { width: 100%; min-height: 112px; padding: 12px; font: inherit; border: 1px solid #cfd5e2; border-radius: 10px; resize: vertical; margin-bottom: 10px; }
-button, .file-button, article a { display: inline-flex; align-items: center; justify-content: center; appearance: none; border: 0; border-radius: 9px; padding: 10px 14px; font: inherit; text-decoration: none; cursor: pointer; min-height: 42px; }
-button { color: white; background: #4256d6; } .file-button, article a, .secondary { color: #3346bb; background: #edf0ff; }
-.secondary.small { min-height: 34px; padding: 6px 10px; font-size: 13px; }
-.file-button { position: relative; overflow: hidden; white-space: nowrap; }
-.file-button input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
-@media (max-width: 380px) { body { padding: 14px 12px 32px; } .card { padding: 14px; } .actions > * { flex: 1; } }
-#incoming.empty { color: #8992a4; } article { padding: 13px 0; border-bottom: 1px solid #edf0f5; line-height: 1.5; } article:last-child { border: 0; } article .content { white-space: pre-wrap; margin-bottom: 9px; }.privacy { color: #7d8798; font-size: 13px; text-align: center; margin-top: 20px; }
-.expired-page { min-height: 100vh; display: grid; place-items: center; }
-.expired-card { width: min(100%, 460px); text-align: center; padding: 30px 22px; }
-.scan-icon { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 20px; background: #edf0ff; color: #4256d6; font-size: 38px; }
-.expired-card h1 { margin-bottom: 8px; }
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #17191d;
+  background: #f4f5f7;
+}
 
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body { margin: 0; background: #f4f5f7; }
+button, textarea, input { font: inherit; }
+button { cursor: pointer; }
+
+.chat-page {
+  min-height: 100dvh;
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: #f4f5f7;
+}
+
+.chat-header {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+  background: rgba(255, 255, 255, .94);
+  border-bottom: 1px solid #e6e7e9;
+}
+
+.mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: #4158d8;
+  color: #fff;
+  font-size: 22px;
+  flex: 0 0 auto;
+}
+
+.device-summary { min-width: 0; }
+h1, p { margin: 0; }
+h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; font-weight: 650; }
+.connection-status, .transfer-status { margin-top: 3px; color: #74777d; font-size: 12px; }
+.connection-status::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #46b96b; vertical-align: 1px; }
+.connection-status.is-reconnecting::before { background: #eea52b; }
+.connection-status.is-offline::before { background: #a6a8ad; }
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 16px 126px;
+  overscroll-behavior: contain;
+}
+
+.empty-state {
+  min-height: 100%;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: #8b8e94;
+  text-align: center;
+  font-size: 14px;
+}
+.empty-state small { color: #a6a8ad; font-size: 12px; }
+.empty-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 18px; background: #e9ebf3; color: #7a82bb; font-size: 31px; }
+
+.message { display: flex; gap: 8px; margin-bottom: 14px; align-items: flex-end; }
+.message.outgoing { justify-content: flex-end; }
+.message-bubble { max-width: min(78%, 520px); padding: 10px 12px; border-radius: 13px; line-height: 1.48; font-size: 15px; word-break: break-word; box-shadow: 0 1px 1px #14182008; }
+.message.incoming .message-bubble { background: #fff; border-top-left-radius: 4px; }
+.message.outgoing .message-bubble { background: #dce8ff; border-top-right-radius: 4px; }
+.message-text { white-space: pre-wrap; }
+.message-meta { margin-top: 5px; color: #7b8190; font-size: 11px; }
+.message.outgoing .message-meta { text-align: right; }
+
+.file-card { min-width: 184px; display: flex; align-items: center; gap: 10px; }
+.file-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: #f0f2fb; color: #5362b9; font-size: 18px; flex: 0 0 auto; }
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-link { display: inline-flex; margin-top: 8px; color: #3f57cc; font-size: 13px; text-decoration: none; }
+.download-link:active { opacity: .65; }
+
+.composer-shell {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  padding: 8px max(12px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: rgba(248, 249, 251, .96);
+  border-top: 1px solid #e3e5e8;
+  backdrop-filter: blur(12px);
+}
+
+.composer, .transfer-status { width: min(100%, 696px); margin-right: auto; margin-left: auto; }
+.composer { background: #fff; border: 1px solid #d8dbe1; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 9px #1118270d; }
+textarea { display: block; width: 100%; min-height: 50px; max-height: 126px; padding: 12px 13px 7px; border: 0; outline: 0; resize: none; line-height: 1.45; background: transparent; }
+textarea::placeholder { color: #a6a9b0; }
+.composer-actions { display: flex; align-items: center; justify-content: space-between; min-height: 43px; padding: 4px 7px 6px 8px; border-top: 1px solid #edf0f3; }
+.attachment-button { position: relative; display: grid; place-items: center; width: 32px; height: 32px; overflow: hidden; border: 0; border-radius: 50%; color: #5c6573; background: #f1f3f6; font-size: 25px; line-height: 1; cursor: pointer; }
+.attachment-button input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.send-button { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 0 12px; border: 0; border-radius: 9px; color: #fff; background: #4261d6; font-size: 13px; font-weight: 600; }
+.send-button:disabled { background: #aeb7df; cursor: default; }
+.transfer-status { min-height: 14px; padding: 4px 4px 0; color: #777c86; font-size: 11px; }
+
+.expired-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+.card { width: min(100%, 460px); padding: 30px 22px; border: 1px solid #e1e5ee; border-radius: 16px; background: white; box-shadow: 0 2px 10px #23345a0a; }
+.expired-card { text-align: center; }
+.scan-icon { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 20px; background: #edf0ff; color: #4256d6; font-size: 38px; }
+.muted { color: #687184; font-size: 14px; margin-top: 6px; }
 .help-box { margin-top: 18px; padding: 14px; text-align: left; border-radius: 10px; background: #f5f7fb; color: #596277; font-size: 14px; }
 .help-box p { margin-top: 7px; line-height: 1.45; }
 
+@media (min-width: 721px) {
+  .chat-page { border-right: 1px solid #e4e6e9; border-left: 1px solid #e4e6e9; }
+  .composer-shell { left: max(0px, calc(50% - 360px)); right: max(0px, calc(50% - 360px)); }
+}
+
+@media (max-width: 380px) {
+  .messages { padding-right: 12px; padding-left: 12px; }
+  .message-bubble { max-width: 84%; }
+  .send-button span:last-child { display: none; }
+  .send-button { width: 34px; padding: 0; justify-content: center; }
+}

@@ -1,10 +1,14 @@
 const token = new URLSearchParams(location.search).get('token');
 const headers = { 'x-sendhere-token': token };
 const text = document.querySelector('#text');
-const incoming = document.querySelector('#incoming');
+const messages = document.querySelector('#messages');
+const emptyState = document.querySelector('#empty-state');
 const status = document.querySelector('#upload-status');
 const deviceNameLabel = document.querySelector('#device-name');
 const computerNameLabel = document.querySelector('#computer-name');
+const connectionStatus = document.querySelector('#connection-status');
+const sendButton = document.querySelector('#send-text');
+const filesInput = document.querySelector('#files');
 const browserIdKey = 'sendhere-device-id';
 let browserId = localStorage.getItem(browserIdKey);
 if (!browserId) {
@@ -23,43 +27,83 @@ function renderDeviceName() {
   deviceNameLabel.textContent = `这台手机：${clientName}`;
 }
 
-renderDeviceName();
-
-function showIncoming(node) {
-  incoming.classList.remove('empty');
-  incoming.prepend(node);
+function scrollToLatest() {
+  requestAnimationFrame(() => { messages.scrollTop = messages.scrollHeight; });
 }
 
-function addText(value) {
-  const block = document.createElement('article');
-  const content = document.createElement('div');
-  content.className = 'content';
-  content.textContent = value;
-  const copy = document.createElement('button');
-  copy.className = 'secondary';
-  copy.textContent = '复制';
-  copy.onclick = () => navigator.clipboard.writeText(value);
-  block.append(content, copy);
-  const url = value.match(/^https?:\/\/\S+$/);
-  if (url) {
-    const open = document.createElement('a');
-    open.href = url[0];
-    open.target = '_blank';
-    open.rel = 'noopener';
-    open.textContent = '打开链接';
-    block.append(open);
+function showMessage(node) {
+  emptyState?.remove();
+  messages.append(node);
+  scrollToLatest();
+}
+
+function messageBubble({ direction, content, meta }) {
+  const row = document.createElement('article');
+  row.className = `message ${direction}`;
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
+  bubble.append(content);
+  if (meta) {
+    const detail = document.createElement('div');
+    detail.className = 'message-meta';
+    detail.textContent = meta;
+    bubble.append(detail);
   }
-  showIncoming(block);
+  row.append(bubble);
+  return row;
 }
 
-function addFile(name, downloadPath) {
-  const block = document.createElement('article');
-  block.textContent = `电脑发来文件：${name}`;
-  const link = document.createElement('a');
-  link.href = `${downloadPath}?token=${encodeURIComponent(token)}`;
-  link.textContent = '下载';
-  block.append(document.createElement('br'), link);
-  showIncoming(block);
+function textContent(value) {
+  const content = document.createElement('div');
+  content.className = 'message-text';
+  content.textContent = value;
+  return content;
+}
+
+function fileContent(name, downloadPath) {
+  const content = document.createElement('div');
+  content.className = 'file-card';
+  const icon = document.createElement('span');
+  icon.className = 'file-icon';
+  icon.textContent = '▧';
+  const detail = document.createElement('div');
+  const title = document.createElement('div');
+  title.className = 'file-name';
+  title.textContent = name;
+  detail.append(title);
+  if (downloadPath) {
+    const link = document.createElement('a');
+    link.className = 'download-link';
+    link.href = `${downloadPath}?token=${encodeURIComponent(token)}`;
+    link.textContent = '下载到本地';
+    detail.append(link);
+  }
+  content.append(icon, detail);
+  return content;
+}
+
+function addIncomingText(value) {
+  showMessage(messageBubble({ direction: 'incoming', content: textContent(value) }));
+}
+
+function addIncomingFile(name, downloadPath) {
+  showMessage(messageBubble({
+    direction: 'incoming',
+    content: fileContent(name, downloadPath),
+    meta: '电脑发来的文件',
+  }));
+}
+
+function addOutgoingText(value) {
+  showMessage(messageBubble({ direction: 'outgoing', content: textContent(value), meta: '已发送' }));
+}
+
+function addOutgoingFile(name, state = '已发送') {
+  showMessage(messageBubble({
+    direction: 'outgoing',
+    content: fileContent(name),
+    meta: state,
+  }));
 }
 
 function showExpired() {
@@ -74,21 +118,45 @@ async function request(url, options) {
   return response;
 }
 
-document.querySelector('#send-text').onclick = async () => {
+function resizeComposer() {
+  text.style.height = 'auto';
+  text.style.height = `${Math.min(text.scrollHeight, 126)}px`;
+}
+
+async function sendText() {
   const value = text.value.trim();
-  if (!value) return;
-  const response = await request('/api/text?token=' + encodeURIComponent(token), {
-    method: 'POST',
-    headers: { ...headers, 'content-type': 'application/json' },
-    body: JSON.stringify({ text: value, clientName, deviceId: browserId }),
-  });
-  if (response.ok) {
-    text.value = '';
-    status.textContent = '已发送到电脑';
-  } else if (response.status !== 403) {
-    status.textContent = '发送失败，请重新扫码。';
+  if (!value || sendButton.disabled) return;
+  sendButton.disabled = true;
+  try {
+    const response = await request('/api/text?token=' + encodeURIComponent(token), {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ text: value, clientName, deviceId: browserId }),
+    });
+    if (response.ok) {
+      text.value = '';
+      resizeComposer();
+      addOutgoingText(value);
+      status.textContent = '';
+    } else if (response.status !== 403) {
+      status.textContent = '文字发送失败，请检查连接后重试。';
+    }
+  } catch (_) {
+    status.textContent = '文字发送失败，请检查网络后重试。';
+  } finally {
+    sendButton.disabled = false;
   }
-};
+}
+
+sendButton.onclick = sendText;
+text.addEventListener('input', resizeComposer);
+text.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    sendText();
+  }
+});
+resizeComposer();
 
 async function uploadFile(file) {
   // Upload one File as the request body rather than as multipart/form-data.
@@ -110,19 +178,20 @@ async function uploadFile(file) {
   }
 }
 
-document.querySelector('#files').onchange = async event => {
+filesInput.onchange = async event => {
   const files = [...event.target.files];
   if (!files.length) return;
   try {
     for (let index = 0; index < files.length; index++) {
       status.textContent = files.length === 1
-          ? `正在上传 ${files[index].name}…`
-          : `正在上传 ${index + 1}/${files.length}：${files[index].name}`;
+        ? `正在发送 ${files[index].name}…`
+        : `正在发送 ${index + 1}/${files.length}：${files[index].name}`;
       await uploadFile(files[index]);
+      addOutgoingFile(files[index].name);
     }
-    status.textContent = '上传完成';
+    status.textContent = '';
   } catch (_) {
-    status.textContent = '上传失败，请重新扫码后重试。';
+    status.textContent = '文件发送失败，请检查连接后重试。';
   } finally {
     event.target.value = '';
   }
@@ -131,15 +200,20 @@ document.querySelector('#files').onchange = async event => {
 request('/api/status?token=' + encodeURIComponent(token))
   .then(response => response.ok ? response.json() : null)
   .then(data => {
-    if (data) computerNameLabel.textContent = `已连接到电脑：${data.deviceName}`;
+    if (data) computerNameLabel.textContent = data.deviceName;
   })
-  .catch(() => computerNameLabel.textContent = '连接已失效，请重新扫码');
+  .catch(() => {
+    computerNameLabel.textContent = '电脑连接不可用';
+    connectionStatus.textContent = '连接已失效，请重新扫码';
+    connectionStatus.className = 'connection-status is-offline';
+  });
 
 const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const socketUrl = `${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`;
 
-function setConnectionStatus(message) {
-  status.textContent = message;
+function setConnectionStatus(message, state = '') {
+  connectionStatus.textContent = message;
+  connectionStatus.className = `connection-status ${state}`.trim();
 }
 
 function stopHeartbeat() {
@@ -173,9 +247,13 @@ function connectSocket() {
     setConnectionStatus('已连接到电脑');
   };
   socket.onmessage = ({ data }) => {
-    const event = JSON.parse(data);
-    if (event.type === 'desktop_text') addText(event.text);
-    if (event.type === 'desktop_file') addFile(event.fileName, event.downloadPath);
+    try {
+      const event = JSON.parse(data);
+      if (event.type === 'desktop_text') addIncomingText(event.text);
+      if (event.type === 'desktop_file') addIncomingFile(event.fileName, event.downloadPath);
+    } catch (_) {
+      status.textContent = '收到了一条无法识别的消息。';
+    }
   };
   socket.onclose = event => {
     stopHeartbeat();
@@ -183,7 +261,7 @@ function connectSocket() {
       showExpired();
       return;
     }
-    setConnectionStatus('连接暂时中断，正在恢复…');
+    setConnectionStatus('连接暂时中断，正在恢复…', 'is-reconnecting');
     scheduleReconnect();
   };
   socket.onerror = () => socket.close();
@@ -197,4 +275,5 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+renderDeviceName();
 connectSocket();

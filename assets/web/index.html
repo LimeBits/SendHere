@@ -1,33 +1,44 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
+<head></head>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta charset="utf-8">
-  <title>SendHere · 传到这</title>
+  <title></title>SendHere · 传到这</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main>
-    <header>
-      <span class="mark">↔</span>
-      <div><h1>SendHere</h1><p id="device-name">这台手机：正在设置名称…</p><p id="computer-name" class="muted">正在连接电脑…</p></div>
-    </header>
-    <section class="card">
-      <div class="section-title"><h2>发送到电脑</h2></div></h2>
-      <textarea id="text" placeholder="输入或粘贴文字、链接…"></textarea>
-      <div class="actions">
-        <button id="send-text" type="button">发送文字</button>
-        <label class="file-button">选择图片或文件
-          <input id="files" type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.7z,.txt">
-        </label>
+</body>  <main class="chat-page">
+    <header class="chat-header">
+      <span class="mark" aria-hidden="true">↔</span>
+      <div class="device-summary">
+        <h1 id="computer-name">正在连接电脑…</h1>
+        <p id="connection-status" class="connection-status" aria-live="polite">正在建立连接</p>
       </div>
-      <p id="upload-status" class="muted"></p>
+    </header>
+
+    <section id="messages" class="messages" aria-label="与电脑的传输记录">
+      <div id="empty-state" class="empty-state">
+        <span class="empty-icon" aria-hidden="true">⌁</span>
+        <p>还没有消息，开始发送</p>吧。</p>
+        <small id="device-name">这台手机：正在设置名称…</small>
+      </div>
     </section>
-    <section class="card">
-      <h2>电脑发来的内容</h2>
-      <div id="incoming" class="empty">暂无</div>
-    </section>
-    <p class="privacy">数据仅在当前局域网设备之间传输，不上传云端。</p>
+
+    <footer class="composer-shell">
+      <div class="composer">
+        <textarea id="text" rows="1" placeholder="输入消息" aria-label="输入消息"></textarea>
+        <div class="composer-actions">
+          <label class="attachment-button" aria-label="添加图片或文件" title="添加图片或文件">
+            <span aria-hidden="true">+</span>
+            <input id="files" type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.7z,.txt">
+          </label>
+          <button id="send-text" class="send-button" type="button" aria-label="发送消息">
+            <span aria-hidden="true">➤</span><span></span>发送</span>
+          </button>
+        </div>
+      </div>
+      <p id="upload-status" class="transfer-status" aria-live="polite"></p>
+    </footer>
   </main>
   <script src="/app.js"></script>
 </body>

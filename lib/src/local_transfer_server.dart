@@ -301,7 +301,7 @@ class LocalTransferServer {
       return Response.notFound('File not found.');
     }
     return Response.ok(download.file.openRead(), headers: {
-      'content-type': 'application/octet-stream',
+      'content-type': lookupMimeType(download.name) ?? 'application/octet-stream',
       'content-disposition':
           'attachment; filename="${_contentDispositionFilename(download.name)}"',
       'content-length': (await download.file.length()).toString(),

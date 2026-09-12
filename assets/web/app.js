@@ -60,12 +60,53 @@ function textContent(value) {
   return content;
 }
 
+function isImage(name) {
+  return /\.(avif|gif|heic|heif|jpe?g|png|webp)$/i.test(name);
+}
+
+function showImagePreview(source, name) {
+  const overlay = document.createElement('div');
+  overlay.className = 'image-preview';
+  const image = document.createElement('img');
+  image.src = source;
+  image.alt = name;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = '×';
+  const dismiss = () => overlay.remove();
+  close.onclick = dismiss;
+  overlay.onclick = event => {
+    if (event.target === overlay) dismiss();
+  };
+  overlay.append(image, close);
+  document.body.append(overlay);
+}
+
+function imageContent(name, source) {
+  const content = document.createElement('div');
+  content.className = 'image-card';
+  const image = document.createElement('img');
+  image.className = 'image-thumbnail';
+  image.src = source;
+  image.alt = name;
+  image.loading = 'lazy';
+  image.onclick = () => showImagePreview(source, name);
+  const label = document.createElement('div');
+  label.className = 'image-name';
+  label.textContent = name;
+  content.append(image, label);
+  return content;
+}
+
 function fileContent(name, downloadPath) {
+  if (isImage(name) && downloadPath) {
+    return imageContent(name, `${downloadPath}?token=${encodeURIComponent(token)}`);
+  }
   const content = document.createElement('div');
   content.className = 'file-card';
   const icon = document.createElement('span');
   icon.className = 'file-icon';
-  icon.textContent = '▧';
+  icon.textContent = '▤';
   const detail = document.createElement('div');
   const title = document.createElement('div');
   title.className = 'file-name';
@@ -98,12 +139,11 @@ function addOutgoingText(value) {
   showMessage(messageBubble({ direction: 'outgoing', content: textContent(value), meta: '已发送' }));
 }
 
-function addOutgoingFile(name, state = '已发送') {
-  showMessage(messageBubble({
-    direction: 'outgoing',
-    content: fileContent(name),
-    meta: state,
-  }));
+function addOutgoingFile(file, state = '已发送') {
+  const content = isImage(file.name)
+    ? imageContent(file.name, URL.createObjectURL(file))
+    : fileContent(file.name);
+  showMessage(messageBubble({ direction: 'outgoing', content, meta: state }));
 }
 
 function showExpired() {
@@ -150,12 +190,8 @@ async function sendText() {
 
 sendButton.onclick = sendText;
 text.addEventListener('input', resizeComposer);
-text.addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-    event.preventDefault();
-    sendText();
-  }
-});
+// The mobile keyboard's return key always inserts a newline. Sending is an
+// explicit action through the button, matching the native mobile app.
 resizeComposer();
 
 async function uploadFile(file) {
@@ -187,7 +223,7 @@ filesInput.onchange = async event => {
         ? `正在发送 ${files[index].name}…`
         : `正在发送 ${index + 1}/${files.length}：${files[index].name}`;
       await uploadFile(files[index]);
-      addOutgoingFile(files[index].name);
+      addOutgoingFile(files[index]);
     }
     status.textContent = '';
   } catch (_) {

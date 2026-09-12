@@ -48,6 +48,29 @@ private final class DesktopImagePreviewController: NSObject {
   static let shared = DesktopImagePreviewController()
   private var window: NSWindow?
 
+  private static func makeDownloadIcon() -> NSImage {
+    let size = NSSize(width: 30, height: 30)
+    let image = NSImage(size: size)
+    image.lockFocus()
+    defer { image.unlockFocus() }
+
+    NSColor.white.setStroke()
+    let path = NSBezierPath()
+    path.lineWidth = 2.6
+    path.lineCapStyle = .round
+    path.lineJoinStyle = .round
+    path.move(to: NSPoint(x: 15, y: 25))
+    path.line(to: NSPoint(x: 15, y: 10))
+    path.move(to: NSPoint(x: 8.5, y: 16.5))
+    path.line(to: NSPoint(x: 15, y: 10))
+    path.line(to: NSPoint(x: 21.5, y: 16.5))
+    path.move(to: NSPoint(x: 6, y: 5.5))
+    path.line(to: NSPoint(x: 24, y: 5.5))
+    path.stroke()
+    image.isTemplate = false
+    return image
+  }
+
   func show(path: String, name: String) throws {
     guard let image = NSImage(contentsOfFile: path) else {
       throw NSError(
@@ -91,18 +114,13 @@ private final class DesktopImagePreviewController: NSObject {
     imageView.imageAlignment = .alignCenter
     imageView.autoresizingMask = [.width, .height]
     contentView.addSubview(imageView)
-    let downloadSymbol = NSImage(
-      systemSymbolName: "arrow.down.to.line",
-      accessibilityDescription: "下载到本地")?.withSymbolConfiguration(
-        NSImage.SymbolConfiguration(pointSize: 30, weight: .medium)) ?? NSImage()
     let saveButton = NSButton(
-      image: downloadSymbol,
+      image: Self.makeDownloadIcon(),
       target: self,
       action: #selector(saveFromPreview(_:)))
     saveButton.bezelStyle = .regularSquare
     saveButton.isBordered = false
-    saveButton.contentTintColor = .white
-    saveButton.imageScaling = .scaleProportionallyUpOrDown
+    saveButton.imageScaling = .scaleNone
     saveButton.wantsLayer = true
     saveButton.layer?.backgroundColor = NSColor(calibratedWhite: 0.18, alpha: 0.64).cgColor
     saveButton.layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor

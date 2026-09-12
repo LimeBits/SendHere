@@ -75,13 +75,21 @@ function showImagePreview(source, name) {
   image.alt = name;
   const close = document.createElement('button');
   close.type = 'button';
+  close.className = 'preview-close';
+  close.setAttribute('aria-label', '关闭预览');
   close.textContent = '×';
+  const download = document.createElement('a');
+  download.className = 'preview-download';
+  download.href = source;
+  download.download = name;
+  download.setAttribute('aria-label', '下载图片');
+  download.textContent = '⇩';
   const dismiss = () => overlay.remove();
   close.onclick = dismiss;
   overlay.onclick = event => {
     if (event.target === overlay) dismiss();
   };
-  overlay.append(image, close);
+  overlay.append(image, close, download);
   document.body.append(overlay);
 }
 

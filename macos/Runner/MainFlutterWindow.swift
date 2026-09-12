@@ -146,6 +146,7 @@ private final class DesktopImagePreviewController: NSObject {
           try FileManager.default.removeItem(at: destination)
         }
         try FileManager.default.copyItem(at: source, to: destination)
+        NSWorkspace.shared.activateFileViewerSelecting([destination])
       } catch {
         NSAlert(error: error).runModal()
       }

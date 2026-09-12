@@ -61,6 +61,7 @@ Future<void> _saveImageToDevice(
       final destination = await getSaveLocation(suggestedName: fileName);
       if (destination == null) return;
       await File(filePath).copy(destination.path);
+      await Process.run('explorer.exe', ['/select,', destination.path]);
     } else {
       await _mobileFileChannel.invokeMethod<void>('saveImage', {
         'path': filePath,

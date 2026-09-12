@@ -66,7 +66,7 @@ private final class ConversationDropView: NSView {
   private func configureDropOverlay() {
     wantsLayer = true
     dropOverlay.wantsLayer = true
-    dropOverlay.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
+    dropOverlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.58).cgColor
     dropOverlay.isHidden = true
     dropOverlay.autoresizingMask = []
     addSubview(dropOverlay, positioned: .above, relativeTo: nil)
@@ -75,6 +75,7 @@ private final class ConversationDropView: NSView {
     dropCard.blendingMode = .withinWindow
     dropCard.state = .active
     dropCard.wantsLayer = true
+    dropCard.layer?.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 0.90).cgColor
     dropCard.layer?.cornerRadius = 14
     dropCard.layer?.masksToBounds = true
     dropCard.frame.size = NSSize(width: 196, height: 76)
@@ -82,7 +83,7 @@ private final class ConversationDropView: NSView {
 
     dropTitle.alignment = .center
     dropTitle.font = .systemFont(ofSize: 17, weight: .semibold)
-    dropTitle.textColor = .labelColor
+    dropTitle.textColor = .white
     dropTitle.frame = NSRect(x: 16, y: 26, width: 164, height: 24)
     dropCard.addSubview(dropTitle)
   }
@@ -135,12 +136,12 @@ private final class DesktopImagePreviewController: NSObject {
     tray.lineWidth = 2.5
     tray.lineCapStyle = .round
     tray.lineJoinStyle = .round
-    tray.move(to: NSPoint(x: 6.5, y: 13))
+    tray.move(to: NSPoint(x: 6.5, y: 10.5))
     tray.line(to: NSPoint(x: 6.5, y: 7.5))
-    tray.curve(to: NSPoint(x: 8.5, y: 5.5), controlPoint1: NSPoint(x: 6.5, y: 6.4), controlPoint2: NSPoint(x: 7.4, y: 5.5))
-    tray.line(to: NSPoint(x: 21.5, y: 5.5))
-    tray.curve(to: NSPoint(x: 23.5, y: 7.5), controlPoint1: NSPoint(x: 22.6, y: 5.5), controlPoint2: NSPoint(x: 23.5, y: 6.4))
-    tray.line(to: NSPoint(x: 23.5, y: 13))
+    tray.curve(to: NSPoint(x: 8.5, y: 6.5), controlPoint1: NSPoint(x: 6.5, y: 6.9), controlPoint2: NSPoint(x: 7.4, y: 6.5))
+    tray.line(to: NSPoint(x: 21.5, y: 6.5))
+    tray.curve(to: NSPoint(x: 23.5, y: 7.5), controlPoint1: NSPoint(x: 22.6, y: 6.5), controlPoint2: NSPoint(x: 23.5, y: 6.9))
+    tray.line(to: NSPoint(x: 23.5, y: 10.5))
     tray.stroke()
     image.isTemplate = false
     return image

@@ -93,18 +93,19 @@ private final class DesktopImagePreviewController: NSObject {
     contentView.addSubview(imageView)
     let saveButton = NSButton(
       image: NSImage(
-        systemSymbolName: "arrow.down.to.line.compact",
+        systemSymbolName: "arrow.down.to.line",
         accessibilityDescription: "下载到本地") ?? NSImage(),
       target: self,
       action: #selector(saveFromPreview(_:)))
-    saveButton.bezelStyle = .texturedRounded
+    saveButton.bezelStyle = .regularSquare
+    saveButton.isBordered = false
     saveButton.contentTintColor = .white
     saveButton.wantsLayer = true
-    saveButton.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-    saveButton.layer?.cornerRadius = 20
+    saveButton.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.25).cgColor
+    saveButton.layer?.cornerRadius = 24
     saveButton.toolTip = "下载到本地"
     saveButton.identifier = NSUserInterfaceItemIdentifier(path)
-    saveButton.frame = NSRect(x: contentView.bounds.width - 56, y: 16, width: 40, height: 40)
+    saveButton.frame = NSRect(x: contentView.bounds.width - 64, y: 16, width: 48, height: 48)
     saveButton.autoresizingMask = [.minXMargin, .maxYMargin]
     contentView.addSubview(saveButton)
     preview.contentView = contentView

@@ -272,14 +272,27 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
               alignment: Alignment.bottomRight,
               child: Padding(
                 padding: const EdgeInsets.all(18),
-                child: IconButton.filled(
-                  tooltip: '保存到相册',
-                  onPressed: () => _saveImageToDevice(
-                    context,
-                    widget.filePath,
-                    widget.fileName,
+                child: Material(
+                  color: Colors.white24,
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: () => _saveImageToDevice(
+                      context,
+                      widget.filePath,
+                      widget.fileName,
+                    ),
+                    child: const SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: Icon(
+                        Icons.file_download_outlined,
+                        size: 30,
+                        color: Colors.white,
+                        semanticLabel: '保存到相册',
+                      ),
+                    ),
                   ),
-                  icon: const Icon(Icons.download_outlined),
                 ),
               ),
             ),

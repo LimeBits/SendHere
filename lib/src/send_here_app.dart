@@ -667,8 +667,13 @@ class _SendHereHomeState extends State<SendHereHome>
       for (final id in disappearedIds) {
         final existing = _connectedPeers[id];
         if (existing != null) {
-          _connectedPeers[id] =
-              existing.copyWith(online: false, lastSeenAt: DateTime.now());
+          // mDNS can briefly withdraw a service while the app is foregrounded
+          // or the Wi-Fi radio roams. Do not turn a healthy peer WebSocket into
+          // “刚刚在线”; its real close event remains the offline authority.
+          _connectedPeers[id] = existing.copyWith(
+            online: _server?.hasDevice(id) ?? false,
+            lastSeenAt: DateTime.now(),
+          );
         }
       }
       _discoveredComputerIds
@@ -698,9 +703,8 @@ class _SendHereHomeState extends State<SendHereHome>
     });
     _saveRecentDevices();
 
-    for (final id in disappearedIds) {
-      unawaited(_server?.disconnectPeer(id) ?? Future<void>.value());
-    }
+    // A transient mDNS loss must not close an established peer socket. The
+    // socket's onDone callback publishes the actual offline transition.
 
     // Only one side dials. The other side receives that peer's WebSocket,
     // preventing duplicate sessions when both computers discover each other.
@@ -1211,17 +1215,16 @@ class _SendHereHomeState extends State<SendHereHome>
               ]
             : null,
         title: mobile
-            ? Text(
-                _showMobileConversation
-                    ? (_selectedPeerId == null
+            ? _showMobileConversation
+                ? _MobileConversationTitle(
+                    name: _selectedPeerId == null
                         ? '消息'
-                        : _connectedPeers[_selectedPeerId]?.name ?? '消息')
-                    : 'SendHere',
-                style: _showMobileConversation
-                    ? const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)
-                    : const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.w700),
-              )
+                        : _connectedPeers[_selectedPeerId]?.name ?? '消息',
+                    online: _selectedPeerId != null &&
+                        _connectedPeers[_selectedPeerId]?.online == true,
+                  )
+                : const Text('SendHere',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700))
             : null,
       ),
       body: Padding(
@@ -1978,6 +1981,38 @@ class _PhoneConnectCard extends StatelessWidget {
             label: const Text('收起二维码'),
           ),
         ]),
+      );
+}
+
+class _MobileConversationTitle extends StatelessWidget {
+  const _MobileConversationTitle({required this.name, required this.online});
+
+  final String name;
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(width: 7),
+          Tooltip(
+            message: online ? '在线' : '离线',
+            child: Icon(
+              online ? Icons.circle : Icons.cloud_off_outlined,
+              size: online ? 10 : 18,
+              color: online
+                  ? Colors.green
+                  : Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       );
 }
 

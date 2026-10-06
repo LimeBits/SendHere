@@ -1231,8 +1231,10 @@ class _SendHereHomeState extends State<SendHereHome>
         padding: EdgeInsets.all(mobile ? 0 : 16),
         child: _error != null
             ? _ErrorView(error: _error!, retry: _startServer)
-            : _server == null || url == null
+            : _server == null
                 ? const Center(child: CircularProgressIndicator())
+                : url == null
+                    ? _NoLanView(retry: _startServer)
                 : LayoutBuilder(builder: (context, constraints) {
                     final sidebar = _DeviceSidebar(
                       url: url,
@@ -1252,8 +1254,8 @@ class _SendHereHomeState extends State<SendHereHome>
                       openNotificationSettings: _openNotificationSettings,
                     );
                     final conversation = _ConversationPanel(
-                      key:
-                          ValueKey('conversation-${_selectedPeerId ?? 'none'}'),
+                          key: ValueKey(
+                              'conversation-${_selectedPeerId ?? 'none'}'),
                       controller: _textController,
                       events: _events,
                       sendPending: _sendPending,
@@ -1282,8 +1284,8 @@ class _SendHereHomeState extends State<SendHereHome>
                         if (id != null) _drafts[id] = value;
                       },
                       onMobileBack: mobile
-                          ? () =>
-                              setState(() => _showMobileConversation = false)
+                              ? () => setState(
+                                  () => _showMobileConversation = false)
                           : null,
                     );
                     if (mobile) {
@@ -2590,6 +2592,31 @@ class _FileLabel extends StatelessWidget {
               child: Text(name ?? '文件',
                   maxLines: 2, overflow: TextOverflow.ellipsis)),
         ]),
+      );
+}
+
+/// Shown when the local server is running but no Wi-Fi/Ethernet LAN address
+/// was found, instead of an endless spinner.
+class _NoLanView extends StatelessWidget {
+  const _NoLanView({required this.retry});
+  final Future<void> Function() retry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.wifi_off, size: 48),
+            const SizedBox(height: 12),
+            const Text('未检测到 Wi‑Fi 局域网地址',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            const Text('请连接与电脑相同的 Wi‑Fi（或开启热点），然后点击重试。',
+                textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            FilledButton(onPressed: retry, child: const Text('重试')),
+          ]),
+        ),
       );
 }
 

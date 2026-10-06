@@ -6,6 +6,24 @@ import 'package:send_here/src/local_transfer_server.dart';
 import 'package:send_here/src/transfer_event.dart';
 
 void main() {
+  test('recognises LAN interface names across platforms', () {
+    for (final name in [
+      'en0', 'en1', // macOS / iOS
+      'wlan0', 'swlan0', 'ap0', 'eth0', // Android
+      'Wi-Fi', 'WLAN', 'Ethernet', '以太网', // Windows
+    ]) {
+      expect(LocalTransferServer.isLanInterfaceName(name), isTrue,
+          reason: name);
+    }
+    for (final name in [
+      'rmnet_data0', 'ccmni0', 'pdp_ip0', // cellular
+      'tun0', 'utun3', 'ppp0', 'ipsec0', 'lo', // VPN / loopback
+    ]) {
+      expect(LocalTransferServer.isLanInterfaceName(name), isFalse,
+          reason: name);
+    }
+  });
+
   test('requires a valid token and accepts phone text', () async {
     final directory = await Directory.systemTemp.createTemp('sendhere-test-');
     final server = LocalTransferServer(

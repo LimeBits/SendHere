@@ -121,10 +121,7 @@ class LocalTransferServer {
   Future<List<String>> localAddresses() async {
     final preferred = <String>[];
     for (final interface in await NetworkInterface.list()) {
-      final name = interface.name.toLowerCase();
-      final physical = name.startsWith('en') ||
-          name.contains('wifi') ||
-          name.contains('ethernet');
+      final physical = isLanInterfaceName(interface.name);
       for (final address in interface.addresses) {
         if (address.type != InternetAddressType.IPv4 ||
             address.isLoopback ||
@@ -135,6 +132,25 @@ class LocalTransferServer {
       }
     }
     return preferred.toSet().toList();
+  }
+
+  /// Whether [interfaceName] is a Wi-Fi/Ethernet/hotspot interface.
+  /// - macOS/iOS: en0, en1...
+  /// - Android: wlan0 (Wi-Fi), swlan0/ap0 (hotspot), eth0 (USB Ethernet)
+  /// - Windows: "Wi-Fi", "WLAN", "Ethernet", "以太网"
+  /// Cellular (rmnet*, ccmni*, pdp_ip*) and VPN (tun*, utun*, ppp*, ipsec*)
+  /// interfaces are rejected.
+  static bool isLanInterfaceName(String interfaceName) {
+    final name = interfaceName.toLowerCase();
+    return name.startsWith('en') ||
+        name.startsWith('wlan') ||
+        name.startsWith('swlan') ||
+        name.startsWith('ap') ||
+        name.startsWith('eth') ||
+        name.contains('wi-fi') ||
+        name.contains('wifi') ||
+        name.contains('ethernet') ||
+        name.contains('以太网');
   }
 
   static bool _isPrivateIpv4(String value) {
@@ -301,7 +317,8 @@ class LocalTransferServer {
       return Response.notFound('File not found.');
     }
     return Response.ok(download.file.openRead(), headers: {
-      'content-type': lookupMimeType(download.name) ?? 'application/octet-stream',
+      'content-type':
+          lookupMimeType(download.name) ?? 'application/octet-stream',
       'content-disposition':
           'attachment; filename="${_contentDispositionFilename(download.name)}"',
       'content-length': (await download.file.length()).toString(),

@@ -6,6 +6,28 @@ import 'package:send_here/src/local_transfer_server.dart';
 import 'package:send_here/src/transfer_event.dart';
 
 void main() {
+  test('recognises Tailscale CGNAT addresses', () {
+    for (final address in [
+      '100.64.0.1',
+      '100.115.152.126',
+      '100.127.255.254'
+    ]) {
+      expect(LocalTransferServer.isTailscaleIpv4(address), isTrue,
+          reason: address);
+    }
+    for (final address in [
+      '100.63.255.255',
+      '100.128.0.1',
+      '192.168.1.2',
+      '10.0.0.1',
+      '100.1',
+      'abc',
+    ]) {
+      expect(LocalTransferServer.isTailscaleIpv4(address), isFalse,
+          reason: address);
+    }
+  });
+
   test('recognises LAN interface names across platforms', () {
     for (final name in [
       'en0', 'en1', // macOS / iOS
@@ -251,6 +273,76 @@ void main() {
     );
   });
 
+  test('peers exchange Tailscale addresses so they can reconnect remotely',
+      () async {
+    final dialerDirectory =
+        await Directory.systemTemp.createTemp('sendhere-dialer-');
+    final listenerDirectory =
+        await Directory.systemTemp.createTemp('sendhere-listener-');
+    final dialer = LocalTransferServer(
+      downloadDirectory: dialerDirectory,
+      deviceName: '家里电脑',
+      loadAsset: (asset) => File(asset).readAsBytes(),
+    );
+    final listener = LocalTransferServer(
+      downloadDirectory: listenerDirectory,
+      deviceName: '公司电脑',
+      loadAsset: (asset) => File(asset).readAsBytes(),
+    );
+    addTearDown(() async {
+      await dialer.stop();
+      await listener.stop();
+      await dialerDirectory.delete(recursive: true);
+      await listenerDirectory.delete(recursive: true);
+    });
+
+    await dialer.start();
+    await listener.start();
+    dialer.setLocalEndpoint(
+        address: '127.0.0.1',
+        tailscaleAddress: '100.100.1.1',
+        deviceId: 'dialer-device');
+    listener.setLocalEndpoint(
+        address: '127.0.0.1',
+        tailscaleAddress: '100.100.2.2',
+        deviceId: 'listener-device');
+
+    // probe() reports the peer's name and stable device ID.
+    final probed = await LocalTransferServer.probe('127.0.0.1', listener.port);
+    expect(probed?.name, '公司电脑');
+    expect(probed?.id, 'listener-device');
+    expect(await LocalTransferServer.probe('127.0.0.1', 1), isNull);
+
+    final listenerSaw = listener.events.firstWhere((event) =>
+        event.type == TransferEventType.clientConnected &&
+        event.deviceId == 'dialer-device');
+    final dialerSaw = dialer.events.firstWhere((event) =>
+        event.type == TransferEventType.clientConnected &&
+        event.deviceId == 'listener-device');
+
+    await dialer.connectToPeer(
+      deviceId: 'listener-device',
+      deviceName: '公司电脑',
+      address: '127.0.0.1',
+      peerPort: listener.port,
+      localDeviceId: 'dialer-device',
+    );
+
+    final onListener = await listenerSaw.timeout(const Duration(seconds: 5));
+    expect(onListener.isComputerPeer, isTrue);
+    expect(onListener.peerTailscaleAddress, '100.100.1.1');
+    expect(onListener.peerPort, dialer.port);
+
+    final onDialer = await dialerSaw.timeout(const Duration(seconds: 5));
+    expect(onDialer.peerTailscaleAddress, '100.100.2.2');
+    expect(onDialer.peerPort, listener.port);
+
+    // The identify message triggers a background upload-session request from
+    // the listener back to the dialer; let it finish before teardown closes
+    // both servers, otherwise the forced close surfaces as a test-zone error.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+  });
+
   test('peer session token does not replace the QR token', () async {
     final directory = await Directory.systemTemp.createTemp('sendhere-test-');
     final server = LocalTransferServer(
@@ -287,5 +379,116 @@ void main() {
     qrText.headers.contentType = ContentType.json;
     qrText.write(jsonEncode({'text': '二维码会话仍有效'}));
     expect((await qrText.close()).statusCode, HttpStatus.ok);
+  });
+
+  test(
+      'a LAN connection silently upgrades an existing Tailscale peer '
+      'without a visible disconnect', () async {
+    final dialerDirectory =
+        await Directory.systemTemp.createTemp('sendhere-upgrade-dialer-');
+    final listenerDirectory =
+        await Directory.systemTemp.createTemp('sendhere-upgrade-listener-');
+    // 'localhost' and '127.0.0.1' both reach the same loopback listener, but
+    // are distinct strings a fake classifier can tell apart, standing in for
+    // a real Tailscale address and a real LAN address without needing an
+    // actual 100.64.0.0/10 interface in the test environment.
+    // Both ends must agree on the fake classifier: the listener uses it to
+    // tell the dialer's two identify messages apart, exactly as both real
+    // devices would agree on the real 100.64.0.0/10 range in production.
+    bool fakeIsTailscale(String address) => address == 'localhost';
+    final dialer = LocalTransferServer(
+      downloadDirectory: dialerDirectory,
+      deviceName: '家里电脑',
+      loadAsset: (asset) => File(asset).readAsBytes(),
+      isTailscaleAddress: fakeIsTailscale,
+    );
+    final listener = LocalTransferServer(
+      downloadDirectory: listenerDirectory,
+      deviceName: '公司电脑',
+      loadAsset: (asset) => File(asset).readAsBytes(),
+      isTailscaleAddress: fakeIsTailscale,
+    );
+    addTearDown(() async {
+      await dialer.stop();
+      await listener.stop();
+      await dialerDirectory.delete(recursive: true);
+      await listenerDirectory.delete(recursive: true);
+    });
+
+    await dialer.start();
+    await listener.start();
+    // The dialer's "Tailscale address" is the fake-Tailscale string so its
+    // identify's callback address matches what it dialed on the first leg.
+    dialer.setLocalEndpoint(
+        address: '127.0.0.1',
+        tailscaleAddress: 'localhost',
+        deviceId: 'dialer-device');
+    listener.setLocalEndpoint(
+        address: '127.0.0.1', deviceId: 'listener-device');
+
+    final dialerEvents = <TransferEvent>[];
+    final dialerSubscription = dialer.events.listen(dialerEvents.add);
+    addTearDown(dialerSubscription.cancel);
+    final listenerEvents = <TransferEvent>[];
+    final listenerSubscription = listener.events.listen(listenerEvents.add);
+    addTearDown(listenerSubscription.cancel);
+
+    // First dial looks like Tailscale to the fake classifier.
+    await dialer.connectToPeer(
+      deviceId: 'listener-device',
+      deviceName: '公司电脑',
+      address: 'localhost',
+      peerPort: listener.port,
+      localDeviceId: 'dialer-device',
+    );
+    expect(dialer.peerTransport('listener-device'), PeerTransport.tailscale);
+    // The broadcast stream delivers to listeners asynchronously relative to
+    // the synchronous _events.add() call inside connectToPeer (and the
+    // listener's own identify handling happens over a real socket, adding
+    // another hop), so the initial clientConnected may not have reached
+    // dialerEvents/listenerEvents yet; let it flush before clearing,
+    // otherwise clear() can run first and the legitimate first-connect
+    // event gets mistaken for a replay later.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    // Only events from the upgrade dial onward matter here; the initial
+    // connection legitimately raises its own clientConnected on both ends.
+    dialerEvents.clear();
+    listenerEvents.clear();
+
+    // The two computers then land on the same LAN. Dialing the real LAN
+    // address upgrades the connection: the old socket is replaced, but no
+    // clientDisconnected/clientConnected pair should surface to the UI,
+    // since the UI must not treat an upgrade as the device going briefly
+    // offline and back online.
+    await dialer.connectToPeer(
+      deviceId: 'listener-device',
+      deviceName: '公司电脑',
+      address: '127.0.0.1',
+      peerPort: listener.port,
+      localDeviceId: 'dialer-device',
+    );
+    expect(dialer.peerTransport('listener-device'), PeerTransport.lan);
+    expect(dialer.hasPeer('listener-device'), isTrue);
+
+    // Give the old Tailscale socket's onDone callback time to run; it
+    // debounces the disconnect check by 800ms specifically to absorb this
+    // kind of race, so wait past that window before asserting nothing fired.
+    await Future<void>.delayed(const Duration(milliseconds: 1000));
+    expect(
+        dialerEvents.where((event) =>
+            event.type == TransferEventType.clientDisconnected ||
+            event.type == TransferEventType.clientConnected),
+        isEmpty,
+        reason: 'upgrading transport must not replay connect/disconnect '
+            'on the dialing side');
+    expect(
+        listenerEvents.where((event) =>
+            event.type == TransferEventType.clientDisconnected ||
+            event.type == TransferEventType.clientConnected),
+        isEmpty,
+        reason: 'upgrading transport must not replay connect/disconnect '
+            'on the receiving side');
+    expect(dialer.hasPeer('listener-device'), isTrue);
+    expect(dialer.peerTransport('listener-device'), PeerTransport.lan);
   });
 }

@@ -15,8 +15,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'device_name.dart';
 import 'local_transfer_server.dart';
+import 'message_text.dart';
 import 'nearby_device_service.dart';
 import 'native_text_field.dart';
+import 'message_history.dart';
 import 'outbox.dart';
 import 'transfer_event.dart';
 
@@ -351,14 +353,18 @@ class _SendHereHomeState extends State<SendHereHome>
   final _drafts = <String, String>{};
   final _pendingItems = <String, List<_PendingItem>>{};
   final _outbox = Outbox();
+  final _history = MessageHistory();
   final _sendingOutboxDeviceIds = <String>{};
   Directory? _outboxDirectory;
   LocalTransferServer? _server;
   StreamSubscription<TransferEvent>? _subscription;
   StreamSubscription<List<NearbyDevice>>? _nearbySubscription;
+  Timer? _tailscaleReconnectTimer;
   final _connectingPeerIds = <String>{};
   final _discoveredComputerIds = <String>{};
   String? _address;
+  String? _tailscaleAddress;
+  bool _qrUseTailscale = false;
   String? _error;
   String? _selectedPeerId;
   bool _phoneQrExpanded = false;
@@ -373,6 +379,7 @@ class _SendHereHomeState extends State<SendHereHome>
 
   static const _recentDevicesKey = 'sendhere-recent-devices';
   static const _unreadCountsKey = 'sendhere-unread-counts';
+  static const _qrUseTailscaleKey = 'sendhere-qr-use-tailscale';
   static const _conversationDropChannel =
       MethodChannel('sendhere/conversation_drop');
 
@@ -501,7 +508,15 @@ class _SendHereHomeState extends State<SendHereHome>
   Future<void> _loadInitialState() async {
     _outboxDirectory = await getApplicationSupportDirectory();
     await _outbox.load();
-    _events.addAll(_outbox.items.map(_eventForOutbox));
+    await _history.load(_outboxDirectory!);
+    final outboxIds = _outbox.items.map((item) => item.id).toSet();
+    // _events is newest-first. Pending outbox items take precedence over a
+    // stale history entry sharing their transferId.
+    _events
+      ..addAll(_history.items.where((event) =>
+          event.transferId == null || !outboxIds.contains(event.transferId)))
+      ..addAll(_outbox.items.map(_eventForOutbox))
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     await _loadRecentDevices();
     final preferences = await SharedPreferences.getInstance();
     final rawUnreadCounts = preferences.getString(_unreadCountsKey);
@@ -550,14 +565,10 @@ class _SendHereHomeState extends State<SendHereHome>
       _discoveredComputerIds.clear();
       _connectingPeerIds.clear();
       await _server?.stop();
-      // iOS sandboxes an app's Downloads location: `getDownloadsDirectory()`
-      // can return a path that exists but cannot be created. Documents is
-      // writable on every supported platform and remains user-visible through
-      // the Files app on iPhone and iPad.
-      final documents = await getApplicationDocumentsDirectory();
       final server = LocalTransferServer(
-        downloadDirectory: Directory(path.join(documents.path, 'SendHere')),
+        downloadDirectory: await _receiveDirectory(),
         deviceName: await DeviceName.current(),
+        onFileReceived: Platform.isAndroid ? _publishToAndroidDownloads : null,
       );
       await server.start();
       _subscription = server.events.listen((event) {
@@ -581,11 +592,18 @@ class _SendHereHomeState extends State<SendHereHome>
             if (event.type == TransferEventType.clientConnected) {
               final deviceId = event.deviceId!;
               final shouldOpenPhoneConversation = !event.isComputerPeer;
+              final previous = _connectedPeers[deviceId];
               _connectedPeers[deviceId] = _PeerDevice(
                   id: deviceId,
                   name: event.clientName!,
                   online: true,
-                  lastSeenAt: DateTime.now());
+                  lastSeenAt: DateTime.now(),
+                  tailscaleAddress:
+                      event.peerTailscaleAddress ?? previous?.tailscaleAddress,
+                  port: event.peerPort ?? previous?.port,
+                  transport: event.isComputerPeer
+                      ? server.peerTransport(deviceId)
+                      : null);
               // Every QR browser identification represents a user opening a
               // phone session. It may reuse an ID from the recent-device list,
               // so select it even when that historical conversation already
@@ -601,8 +619,10 @@ class _SendHereHomeState extends State<SendHereHome>
             } else if (event.type == TransferEventType.clientDisconnected) {
               final device = _connectedPeers[event.deviceId!];
               if (device != null) {
-                _connectedPeers[event.deviceId!] =
-                    device.copyWith(online: false, lastSeenAt: DateTime.now());
+                _connectedPeers[event.deviceId!] = device.copyWith(
+                    online: false,
+                    lastSeenAt: DateTime.now(),
+                    clearTransport: true);
               }
             } else {
               final device = _connectedPeers[event.deviceId!];
@@ -614,6 +634,7 @@ class _SendHereHomeState extends State<SendHereHome>
           }
         });
         _saveRecentDevices();
+        unawaited(_history.record(event));
         if (event.type == TransferEventType.text ||
             event.type == TransferEventType.file) {
           unawaited(_notifyIncomingMessage(event));
@@ -629,10 +650,14 @@ class _SendHereHomeState extends State<SendHereHome>
       await _nearby.start(port: server.port);
       _nearbySubscription = _nearby.devices.listen(_syncNearbyDevices);
       final addresses = await server.localAddresses();
+      final tailscale = await server.tailscaleAddresses();
+      final preferences = await SharedPreferences.getInstance();
       final localDeviceId = _nearby.deviceId;
-      if (addresses.isNotEmpty && localDeviceId != null) {
+      if ((addresses.isNotEmpty || tailscale.isNotEmpty) &&
+          localDeviceId != null) {
         server.setLocalEndpoint(
-          address: addresses.first,
+          address: addresses.isEmpty ? null : addresses.first,
+          tailscaleAddress: tailscale.isEmpty ? null : tailscale.first,
           deviceId: localDeviceId,
         );
       }
@@ -640,9 +665,16 @@ class _SendHereHomeState extends State<SendHereHome>
         setState(() {
           _server = server;
           _address = addresses.isEmpty ? null : addresses.first;
+          _tailscaleAddress = tailscale.isEmpty ? null : tailscale.first;
+          _qrUseTailscale = _tailscaleAddress != null &&
+              (_address == null ||
+                  (preferences.getBool(_qrUseTailscaleKey) ?? false));
           _error = null;
         });
-        if (addresses.isEmpty && (Platform.isIOS || Platform.isAndroid)) {
+        _startTailscaleReconnect();
+        if (addresses.isEmpty &&
+            tailscale.isEmpty &&
+            (Platform.isIOS || Platform.isAndroid)) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('未检测到 Wi‑Fi 局域网地址，暂时无法生成连接二维码')),
           );
@@ -653,9 +685,57 @@ class _SendHereHomeState extends State<SendHereHome>
     }
   }
 
+  /// Where received files are saved.
+  /// - macOS / Windows: the user's Downloads folder, like a browser. The macOS
+  ///   sandbox grants this via `com.apple.security.files.downloads.read-write`.
+  /// - iOS / Android (and fallback): Documents/SendHere. iOS sandboxes the
+  ///   Downloads location, and Documents stays visible in the Files app.
+  static Future<Directory> _receiveDirectory() async {
+    if (Platform.isMacOS || Platform.isWindows) {
+      try {
+        final downloads = await getDownloadsDirectory();
+        if (downloads != null) return downloads;
+      } catch (error) {
+        developer.log('Downloads folder unavailable: $error', name: 'SendHere');
+      }
+    }
+    final documents = await getApplicationDocumentsDirectory();
+    return Directory(path.join(documents.path, 'SendHere'));
+  }
+
+  /// Android only: publishes a received file to the public
+  /// Download/SendHere folder so it is visible in the system Files app.
+  /// Falls back to the private copy if publishing fails.
+  static Future<String> _publishToAndroidDownloads(File file) async {
+    try {
+      final published = await _mobileFileChannel.invokeMethod<String>(
+          'publishToDownloads', {'path': file.path});
+      return published ?? file.path;
+    } on PlatformException catch (error) {
+      developer.log('Publish to Downloads failed: ${error.message}',
+          name: 'SendHere');
+      return file.path;
+    }
+  }
+
+  /// Address advertised in the phone QR code: Tailscale when selected (or
+  /// when there is no LAN address), otherwise the LAN address.
+  String? get _qrAddress => _qrUseTailscale && _tailscaleAddress != null
+      ? _tailscaleAddress
+      : _address;
+
   String? get _url {
-    if (_server == null || _address == null) return null;
-    return 'http://$_address:${_server!.port}/?token=${_server!.token}';
+    final address = _qrAddress;
+    if (_server == null || address == null) return null;
+    return 'http://$address:${_server!.port}/?token=${_server!.token}';
+  }
+
+  Future<void> _setQrUseTailscale(bool value) async {
+    if (_tailscaleAddress == null && value) return;
+    if (_address == null && !value) return;
+    setState(() => _qrUseTailscale = value);
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool(_qrUseTailscaleKey, value);
   }
 
   Future<void> _syncNearbyDevices(List<NearbyDevice> devices) async {
@@ -688,14 +768,28 @@ class _SendHereHomeState extends State<SendHereHome>
           localDeviceId: localDeviceId ?? '',
         );
         final existing = _connectedPeers[device.id];
-        _connectedPeers[device.id] = _PeerDevice(
-          id: device.id,
-          name: device.name,
-          // mDNS only proves the device is nearby. A device becomes online
-          // after its peer WebSocket is ready to transfer text and files.
-          online: _server?.hasDevice(device.id) ?? false,
-          lastSeenAt: DateTime.now(),
-        );
+        final onlineNow = _server?.hasDevice(device.id) ?? false;
+        _connectedPeers[device.id] = existing == null
+            ? _PeerDevice(
+                id: device.id,
+                name: device.name,
+                // mDNS only proves the device is nearby. A device becomes
+                // online after its peer WebSocket can transfer text/files.
+                online: onlineNow,
+                lastSeenAt: DateTime.now(),
+                transport: onlineNow ? _server?.peerTransport(device.id) : null,
+              )
+            // Merge rather than replace: a fresh _PeerDevice would silently
+            // drop the remembered tailscaleAddress/port, which the Tailscale
+            // fallback timer relies on to redial after this device later
+            // leaves the LAN again.
+            : existing.copyWith(
+                name: device.name,
+                online: onlineNow,
+                lastSeenAt: DateTime.now(),
+                transport: onlineNow ? _server?.peerTransport(device.id) : null,
+                clearTransport: !onlineNow,
+              );
         if (existing == null && _selectedPeerId == null) {
           _selectedPeerId = device.id;
         }
@@ -708,6 +802,9 @@ class _SendHereHomeState extends State<SendHereHome>
 
     // Only one side dials. The other side receives that peer's WebSocket,
     // preventing duplicate sessions when both computers discover each other.
+    // This also drives the LAN-preferred upgrade: when a device reappears on
+    // mDNS while still connected over Tailscale, _connectPeer dials its LAN
+    // address and swaps transports without dropping the session.
     if (localDeviceId == null) return;
     for (final device in devices) {
       if (localDeviceId.compareTo(device.id) < 0) {
@@ -717,15 +814,24 @@ class _SendHereHomeState extends State<SendHereHome>
   }
 
   Future<bool> _connectPeer(NearbyDevice device) async {
-    if (_server == null ||
+    final server = _server;
+    // A device already connected over Tailscale is still worth dialing again
+    // when it has become reachable on the LAN: LocalTransferServer.connectToPeer
+    // treats that as a silent upgrade rather than a duplicate. Any other
+    // already-connected case (same transport, or already on LAN) is skipped.
+    final isLanUpgradeAttempt = server != null &&
+        server.hasPeer(device.id) &&
+        server.peerTransport(device.id) == PeerTransport.tailscale &&
+        !LocalTransferServer.isTailscaleIpv4(device.address);
+    if (server == null ||
         _nearby.deviceId == null ||
-        _server!.hasPeer(device.id) ||
+        (server.hasPeer(device.id) && !isLanUpgradeAttempt) ||
         _connectingPeerIds.contains(device.id)) {
       return false;
     }
     setState(() => _connectingPeerIds.add(device.id));
     try {
-      await _server!.connectToPeer(
+      await server.connectToPeer(
         deviceId: device.id,
         deviceName: device.name,
         address: device.address,
@@ -736,8 +842,13 @@ class _SendHereHomeState extends State<SendHereHome>
         setState(() {
           final existing = _connectedPeers[device.id];
           if (existing != null) {
-            _connectedPeers[device.id] =
-                existing.copyWith(online: _server!.hasDevice(device.id));
+            // A LAN upgrade swaps the socket without emitting its own
+            // clientConnected event (to avoid an online/offline flash in
+            // the UI), so this is the only place that refreshes the
+            // displayed transport after one succeeds.
+            _connectedPeers[device.id] = existing.copyWith(
+                online: server.hasDevice(device.id),
+                transport: server.peerTransport(device.id));
           }
           _selectedPeerId ??= device.id;
         });
@@ -755,6 +866,217 @@ class _SendHereHomeState extends State<SendHereHome>
     } finally {
       if (mounted) setState(() => _connectingPeerIds.remove(device.id));
     }
+  }
+
+  /// Periodically dials remembered computers over Tailscale when they are not
+  /// discoverable on the LAN (mDNS does not cross Tailscale). LAN discovery
+  /// stays preferred: a device seen via mDNS is skipped here.
+  void _startTailscaleReconnect() {
+    _tailscaleReconnectTimer?.cancel();
+    if (_tailscaleAddress == null) return;
+    unawaited(_reconnectTailscalePeers());
+    _tailscaleReconnectTimer = Timer.periodic(
+        const Duration(seconds: 20), (_) => _reconnectTailscalePeers());
+  }
+
+  Future<void> _reconnectTailscalePeers() async {
+    final server = _server;
+    final localDeviceId = _nearby.deviceId;
+    if (!mounted || server == null || localDeviceId == null) return;
+    for (final device in _connectedPeers.values.toList()) {
+      final address = device.tailscaleAddress;
+      if (address == null ||
+          address == _tailscaleAddress ||
+          _discoveredComputerIds.contains(device.id) ||
+          server.hasPeer(device.id) ||
+          server.hasDevice(device.id)) {
+        continue;
+      }
+      // Same tie-break as LAN discovery so only one side dials.
+      if (localDeviceId.compareTo(device.id) >= 0) continue;
+      final port = device.port ?? 8899;
+      server.updatePeerEndpoint(
+        deviceId: device.id,
+        deviceName: device.name,
+        address: address,
+        port: port,
+        localDeviceId: localDeviceId,
+      );
+      unawaited(_connectPeer(NearbyDevice(
+          id: device.id, name: device.name, address: address, port: port)));
+    }
+  }
+
+  /// Adds a computer that has never been on the same LAN, by its Tailscale IP
+  /// or MagicDNS name (e.g. macmini.tailxxxx.ts.net).
+  Future<void> _showAddRemoteDevice() async {
+    final controller = TextEditingController();
+    String? error;
+    var busy = false;
+    _RemoteAddStage? stage;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(builder: (context, setDialogState) {
+        Future<void> submit() async {
+          final input = controller.text.trim();
+          if (input.isEmpty) return;
+          final parsed = _parseHostPort(input);
+          setDialogState(() {
+            busy = true;
+            error = null;
+            stage = _RemoteAddStage.resolving;
+          });
+          final added = await _addRemoteDevice(
+            parsed.$1,
+            parsed.$2,
+            onStageChanged: (newStage) {
+              if (context.mounted) setDialogState(() => stage = newStage);
+            },
+          );
+          if (!context.mounted) return;
+          if (added == null) {
+            // Hold the "已连接" state briefly so the user actually sees the
+            // connection succeed, instead of the dialog vanishing the instant
+            // connectToPeer returns.
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+            if (context.mounted) Navigator.of(context).pop();
+          } else {
+            setDialogState(() {
+              busy = false;
+              error = added;
+              stage = null;
+            });
+          }
+        }
+
+        return AlertDialog(
+          title: const Text('通过 Tailscale 添加电脑'),
+          content: SizedBox(
+            width: 360,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(
+                _tailscaleAddress == null
+                    ? '本机未检测到 Tailscale 地址，请先打开 Tailscale。'
+                    : '在对方电脑上打开 SendHere，然后输入它的 Tailscale 地址或主机名。本机：$_tailscaleAddress',
+                style: const TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                enabled: !busy,
+                decoration: InputDecoration(
+                  hintText: '100.x.x.x 或 macmini.tailxxxx.ts.net',
+                  errorText: error,
+                  border: const OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => submit(),
+              ),
+              if (busy && stage != null) ...[
+                const SizedBox(height: 12),
+                _RemoteAddProgress(stage: stage!),
+              ],
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: busy ? null : () => Navigator.of(context).pop(),
+                child: const Text('取消')),
+            FilledButton(
+              onPressed: busy ? null : submit,
+              child: busy
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('连接'),
+            ),
+          ],
+        );
+      }),
+    );
+    controller.dispose();
+  }
+
+  static (String, int) _parseHostPort(String input) {
+    final cleaned =
+        input.replaceFirst(RegExp(r'^https?://'), '').split('/').first;
+    final index = cleaned.lastIndexOf(':');
+    if (index > 0) {
+      final port = int.tryParse(cleaned.substring(index + 1));
+      if (port != null) return (cleaned.substring(0, index), port);
+    }
+    return (cleaned, 8899);
+  }
+
+  /// Returns null on success, or an error message. Reports progress via
+  /// [onStageChanged] so the add dialog can show staged feedback (已找到 →
+  /// 正在建立连接 → 已连接) instead of a single opaque spinner, and only
+  /// close once the connection truly succeeds.
+  Future<String?> _addRemoteDevice(
+    String host,
+    int port, {
+    ValueChanged<_RemoteAddStage>? onStageChanged,
+  }) async {
+    final server = _server;
+    final localDeviceId = _nearby.deviceId;
+    if (server == null || localDeviceId == null) return '本地服务尚未就绪';
+    onStageChanged?.call(_RemoteAddStage.resolving);
+    String address;
+    try {
+      address = InternetAddress.tryParse(host) != null
+          ? host
+          : (await InternetAddress.lookup(host, type: InternetAddressType.IPv4)
+                  .timeout(const Duration(seconds: 4)))
+              .first
+              .address;
+    } catch (_) {
+      return '无法解析 $host';
+    }
+    if (address == _tailscaleAddress || address == _address) {
+      return '这是本机地址';
+    }
+    final peer = await LocalTransferServer.probe(address, port);
+    if (peer == null) {
+      return '连不上 $address:$port，请确认对方已打开 SendHere 且 Tailscale 在线';
+    }
+    if (peer.id == localDeviceId) return '这是本机';
+    onStageChanged?.call(_RemoteAddStage.found);
+    // Older builds don't report their ID; fall back to an address-based key.
+    final deviceId = peer.id ?? 'tailscale:$address';
+    final name = peer.name;
+    if (server.hasPeer(deviceId) || server.hasDevice(deviceId)) {
+      onStageChanged?.call(_RemoteAddStage.connected);
+      return null;
+    }
+    server.updatePeerEndpoint(
+      deviceId: deviceId,
+      deviceName: name,
+      address: address,
+      port: port,
+      localDeviceId: localDeviceId,
+    );
+    try {
+      onStageChanged?.call(_RemoteAddStage.connecting);
+      // This always dials, ignoring the deviceId tie-break used elsewhere:
+      // the remote side has never heard of us yet (a manual add is
+      // one-directional), so it cannot possibly dial back on its own. Once
+      // our identify message reaches it below, both sides store each
+      // other's Tailscale address and id, and every reconnect after this
+      // one (ours and theirs, in _reconnectTailscalePeers) is governed by
+      // the same tie-break, so the connection stays single-dialer from here.
+      await server.connectToPeer(
+        deviceId: deviceId,
+        deviceName: name,
+        address: address,
+        peerPort: port,
+        localDeviceId: localDeviceId,
+      );
+    } catch (error) {
+      return '连接失败：$error';
+    }
+    onStageChanged?.call(_RemoteAddStage.connected);
+    return null;
   }
 
   Future<void> _offerFiles() async {
@@ -1156,6 +1478,7 @@ class _SendHereHomeState extends State<SendHereHome>
         await _deleteArchivedFile(item.filePath!);
       }
     }
+    await _history.removeDevice(deviceId);
     await _server?.disconnectPeer(deviceId);
     if (!mounted) return;
     setState(() {
@@ -1174,6 +1497,7 @@ class _SendHereHomeState extends State<SendHereHome>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _conversationDropChannel.setMethodCallHandler(null);
+    _tailscaleReconnectTimer?.cancel();
     _subscription?.cancel();
     _nearbySubscription?.cancel();
     _nearby.dispose();
@@ -1222,6 +1546,12 @@ class _SendHereHomeState extends State<SendHereHome>
                         : _connectedPeers[_selectedPeerId]?.name ?? '消息',
                     online: _selectedPeerId != null &&
                         _connectedPeers[_selectedPeerId]?.online == true,
+                    transport: _selectedPeerId == null
+                        ? null
+                        : _connectedPeers[_selectedPeerId]?.transport,
+                    tailscaleAddress: _selectedPeerId == null
+                        ? null
+                        : _connectedPeers[_selectedPeerId]?.tailscaleAddress,
                   )
                 : const Text('SendHere',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700))
@@ -1235,102 +1565,188 @@ class _SendHereHomeState extends State<SendHereHome>
                 ? const Center(child: CircularProgressIndicator())
                 : url == null
                     ? _NoLanView(retry: _startServer)
-                : LayoutBuilder(builder: (context, constraints) {
-                    final sidebar = _DeviceSidebar(
-                      url: url,
-                      connectedPeers: _connectedPeers.values.toList(),
-                      unreadCounts: _unreadCounts,
-                      selectedPeerId: _selectedPeerId,
-                      selectPeer:
-                          mobile ? _openMobileConversation : _selectPeer,
-                      connectPhone: _showPhoneConnectPanel,
-                      showPhoneConnection: !mobile,
-                      phoneQrExpanded: _phoneQrExpanded,
-                      hidePhoneQr: _hidePhoneConnectPanel,
-                      deleteConversation: _deleteConversation,
-                      notificationPermission: _notificationPermission,
-                      requestNotificationPermission: () =>
-                          _refreshNotificationPermission(request: true),
-                      openNotificationSettings: _openNotificationSettings,
-                    );
-                    final conversation = _ConversationPanel(
+                    : LayoutBuilder(builder: (context, constraints) {
+                        final sidebar = _DeviceSidebar(
+                          url: url,
+                          qrNetworkToggle:
+                              _address != null && _tailscaleAddress != null
+                                  ? _QrNetworkToggle(
+                                      useTailscale: _qrUseTailscale,
+                                      onChanged: _setQrUseTailscale,
+                                    )
+                                  : null,
+                          qrViaTailscale: _qrAddress == _tailscaleAddress,
+                          addRemoteDevice: mobile ? null : _showAddRemoteDevice,
+                          connectedPeers: _connectedPeers.values.toList(),
+                          connectingPeerIds: _connectingPeerIds,
+                          unreadCounts: _unreadCounts,
+                          selectedPeerId: _selectedPeerId,
+                          selectPeer:
+                              mobile ? _openMobileConversation : _selectPeer,
+                          connectPhone: _showPhoneConnectPanel,
+                          showPhoneConnection: !mobile,
+                          phoneQrExpanded: _phoneQrExpanded,
+                          hidePhoneQr: _hidePhoneConnectPanel,
+                          deleteConversation: _deleteConversation,
+                          notificationPermission: _notificationPermission,
+                          requestNotificationPermission: () =>
+                              _refreshNotificationPermission(request: true),
+                          openNotificationSettings: _openNotificationSettings,
+                        );
+                        final conversation = _ConversationPanel(
                           key: ValueKey(
                               'conversation-${_selectedPeerId ?? 'none'}'),
-                      controller: _textController,
-                      events: _events,
-                      sendPending: _sendPending,
-                      offerFiles: _offerFiles,
-                      pendingItems: _selectedPeerId == null
-                          ? const []
-                          : List.unmodifiable(
-                              _pendingItems[_selectedPeerId] ?? const []),
-                      removePendingItem: _removePendingItem,
-                      editPendingText: _editPendingText,
-                      addDroppedFiles: _addFilesToPending,
-                      replacePendingCompose: _replacePendingCompose,
-                      cancelOutboxItem: _cancelOutboxItem,
-                      retryOutboxItem: _retryOutboxItem,
-                      selectedPeerId: _selectedPeerId,
-                      selectedPeerName: _selectedPeerId == null
-                          ? null
-                          : _connectedPeers[_selectedPeerId]?.name,
-                      online: _selectedPeerId != null &&
-                          _connectedPeers[_selectedPeerId]?.online == true,
-                      draft: _selectedPeerId == null
-                          ? ''
-                          : _drafts[_selectedPeerId] ?? '',
-                      onDraftChanged: (value) {
-                        final id = _selectedPeerId;
-                        if (id != null) _drafts[id] = value;
-                      },
-                      onMobileBack: mobile
+                          controller: _textController,
+                          events: _events,
+                          sendPending: _sendPending,
+                          offerFiles: _offerFiles,
+                          pendingItems: _selectedPeerId == null
+                              ? const []
+                              : List.unmodifiable(
+                                  _pendingItems[_selectedPeerId] ?? const []),
+                          removePendingItem: _removePendingItem,
+                          editPendingText: _editPendingText,
+                          addDroppedFiles: _addFilesToPending,
+                          replacePendingCompose: _replacePendingCompose,
+                          cancelOutboxItem: _cancelOutboxItem,
+                          retryOutboxItem: _retryOutboxItem,
+                          selectedPeerId: _selectedPeerId,
+                          selectedPeerName: _selectedPeerId == null
+                              ? null
+                              : _connectedPeers[_selectedPeerId]?.name,
+                          online: _selectedPeerId != null &&
+                              _connectedPeers[_selectedPeerId]?.online == true,
+                          draft: _selectedPeerId == null
+                              ? ''
+                              : _drafts[_selectedPeerId] ?? '',
+                          onDraftChanged: (value) {
+                            final id = _selectedPeerId;
+                            if (id != null) _drafts[id] = value;
+                          },
+                          onMobileBack: mobile
                               ? () => setState(
                                   () => _showMobileConversation = false)
-                          : null,
-                    );
-                    if (mobile) {
-                      return AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 260),
-                        reverseDuration: const Duration(milliseconds: 220),
-                        transitionBuilder: (child, animation) {
-                          final conversationChild =
-                              child.key == const ValueKey('conversation');
-                          final offset = Tween<Offset>(
-                            begin: conversationChild
-                                ? const Offset(1, 0)
-                                : const Offset(-0.12, 0),
-                            end: Offset.zero,
-                          ).animate(CurvedAnimation(
-                            parent: animation,
-                            curve: Curves.easeOutCubic,
-                            reverseCurve: Curves.easeInCubic,
-                          ));
-                          return SlideTransition(
-                              position: offset, child: child);
-                        },
-                        child: _showMobileConversation
-                            ? KeyedSubtree(
-                                key: const ValueKey('conversation'),
-                                child: conversation,
-                              )
-                            : KeyedSubtree(
-                                key: const ValueKey('devices'),
-                                child: sidebar,
-                              ),
-                      );
-                    }
-                    return Row(children: [
-                      SizedBox(width: 300, child: sidebar),
-                      const SizedBox(width: 16),
-                      Expanded(child: conversation),
-                    ]);
-                  }),
+                              : null,
+                          transport: _selectedPeerId == null
+                              ? null
+                              : _connectedPeers[_selectedPeerId]?.transport,
+                          tailscaleAddress: _selectedPeerId == null
+                              ? null
+                              : _connectedPeers[_selectedPeerId]
+                                  ?.tailscaleAddress,
+                        );
+                        if (mobile) {
+                          return AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 260),
+                            reverseDuration: const Duration(milliseconds: 220),
+                            transitionBuilder: (child, animation) {
+                              final conversationChild =
+                                  child.key == const ValueKey('conversation');
+                              final offset = Tween<Offset>(
+                                begin: conversationChild
+                                    ? const Offset(1, 0)
+                                    : const Offset(-0.12, 0),
+                                end: Offset.zero,
+                              ).animate(CurvedAnimation(
+                                parent: animation,
+                                curve: Curves.easeOutCubic,
+                                reverseCurve: Curves.easeInCubic,
+                              ));
+                              return SlideTransition(
+                                  position: offset, child: child);
+                            },
+                            child: _showMobileConversation
+                                ? KeyedSubtree(
+                                    key: const ValueKey('conversation'),
+                                    child: conversation,
+                                  )
+                                : KeyedSubtree(
+                                    key: const ValueKey('devices'),
+                                    child: sidebar,
+                                  ),
+                          );
+                        }
+                        return Row(children: [
+                          SizedBox(width: 300, child: sidebar),
+                          const SizedBox(width: 16),
+                          Expanded(child: conversation),
+                        ]);
+                      }),
       ),
     );
   }
 }
 
 enum _AttachmentSource { photos, files }
+
+/// Progress stages shown in the "添加远程电脑" dialog while _addRemoteDevice
+/// resolves the host, probes it, and dials the WebSocket connection.
+enum _RemoteAddStage { resolving, found, connecting, connected }
+
+/// Shows the current _RemoteAddStage as a row of three labelled steps
+/// (已找到 → 正在建立连接 → 已连接), the current one highlighted. "resolving"
+/// (DNS lookup) has no step of its own; it reads as "已找到" not yet reached.
+class _RemoteAddProgress extends StatelessWidget {
+  const _RemoteAddProgress({required this.stage});
+
+  final _RemoteAddStage stage;
+
+  static const _steps = ['已找到', '正在建立连接', '已连接'];
+
+  int get _activeIndex => switch (stage) {
+        _RemoteAddStage.resolving => -1,
+        _RemoteAddStage.found => 0,
+        _RemoteAddStage.connecting => 1,
+        _RemoteAddStage.connected => 2,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final activeIndex = _activeIndex;
+    final accent = Theme.of(context).colorScheme.primary;
+    return Row(
+      children: List.generate(_steps.length * 2 - 1, (index) {
+        if (index.isOdd) {
+          final completed = index ~/ 2 < activeIndex;
+          return Expanded(
+            child: Container(
+              height: 2,
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              color: completed
+                  ? accent
+                  : Theme.of(context).colorScheme.outlineVariant,
+            ),
+          );
+        }
+        final stepIndex = index ~/ 2;
+        final reached = stepIndex <= activeIndex;
+        final current = stepIndex == activeIndex;
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: current
+                ? CircularProgressIndicator(strokeWidth: 2, color: accent)
+                : Icon(
+                    reached ? Icons.check_circle : Icons.circle_outlined,
+                    size: 16,
+                    color: reached
+                        ? accent
+                        : Theme.of(context).colorScheme.outlineVariant,
+                  ),
+          ),
+          const SizedBox(height: 4),
+          Text(_steps[stepIndex],
+              style: TextStyle(
+                  fontSize: 11,
+                  color: reached
+                      ? accent
+                      : Theme.of(context).colorScheme.onSurfaceVariant)),
+        ]);
+      }),
+    );
+  }
+}
 
 class _PendingItem {
   const _PendingItem._({this.text, this.path});
@@ -1349,24 +1765,52 @@ class _PeerDevice {
     required this.name,
     required this.online,
     required this.lastSeenAt,
+    this.tailscaleAddress,
+    this.port,
+    this.transport,
   });
   final String id;
   final String name;
   final bool online;
   final DateTime lastSeenAt;
 
-  _PeerDevice copyWith({String? name, bool? online, DateTime? lastSeenAt}) =>
+  /// Remembered Tailscale address of a computer peer, used to reconnect when
+  /// it is not discoverable on the LAN.
+  final String? tailscaleAddress;
+  final int? port;
+
+  /// How this computer peer is currently routed (LAN vs Tailscale). Null for
+  /// phones, and for a computer peer whose transport isn't known yet. Not
+  /// persisted: it only reflects the live socket, which setState always
+  /// refreshes from LocalTransferServer.peerTransport() on every connection
+  /// event, so a stale value from a previous session is never shown.
+  final PeerTransport? transport;
+
+  _PeerDevice copyWith({
+    String? name,
+    bool? online,
+    DateTime? lastSeenAt,
+    String? tailscaleAddress,
+    int? port,
+    PeerTransport? transport,
+    bool clearTransport = false,
+  }) =>
       _PeerDevice(
         id: id,
         name: name ?? this.name,
         online: online ?? this.online,
         lastSeenAt: lastSeenAt ?? this.lastSeenAt,
+        tailscaleAddress: tailscaleAddress ?? this.tailscaleAddress,
+        port: port ?? this.port,
+        transport: clearTransport ? null : (transport ?? this.transport),
       );
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'lastSeenAt': lastSeenAt.toIso8601String(),
+        if (tailscaleAddress != null) 'tailscaleAddress': tailscaleAddress,
+        if (port != null) 'port': port,
       };
 
   factory _PeerDevice.fromJson(Map<String, dynamic> json) => _PeerDevice(
@@ -1375,13 +1819,19 @@ class _PeerDevice {
         online: false,
         lastSeenAt: DateTime.tryParse(json['lastSeenAt'] as String? ?? '') ??
             DateTime.fromMillisecondsSinceEpoch(0),
+        tailscaleAddress: json['tailscaleAddress'] as String?,
+        port: json['port'] as int?,
       );
 }
 
 class _DeviceSidebar extends StatefulWidget {
   const _DeviceSidebar({
     required this.url,
+    required this.qrNetworkToggle,
+    required this.qrViaTailscale,
+    required this.addRemoteDevice,
     required this.connectedPeers,
+    required this.connectingPeerIds,
     required this.unreadCounts,
     required this.selectedPeerId,
     required this.selectPeer,
@@ -1396,7 +1846,11 @@ class _DeviceSidebar extends StatefulWidget {
   });
 
   final String url;
+  final Widget? qrNetworkToggle;
+  final bool qrViaTailscale;
+  final VoidCallback? addRemoteDevice;
   final List<_PeerDevice> connectedPeers;
+  final Set<String> connectingPeerIds;
   final Map<String, int> unreadCounts;
   final String? selectedPeerId;
   final ValueChanged<String> selectPeer;
@@ -1479,6 +1933,8 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                         reveal: () =>
                             setState(() => _revealedDeviceId = device.id),
                         collapse: _collapseActions,
+                        connecting:
+                            widget.connectingPeerIds.contains(device.id),
                       );
                     },
                     separatorBuilder: (_, __) => mobile
@@ -1500,14 +1956,31 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
               curve: Curves.easeOut,
               child: widget.phoneQrExpanded
                   ? _PhoneConnectCard(
-                      url: widget.url, onCollapse: widget.hidePhoneQr)
+                      url: widget.url,
+                      networkToggle: widget.qrNetworkToggle,
+                      viaTailscale: widget.qrViaTailscale,
+                      onCollapse: widget.hidePhoneQr)
                   : Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: FilledButton.icon(
-                        onPressed: widget.connectPhone,
-                        icon: const Icon(Icons.phone_iphone_outlined),
-                        label: const Text('连接手机'),
-                      ),
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                      child: Row(children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: widget.connectPhone,
+                            icon: const Icon(Icons.phone_iphone_outlined),
+                            label: const Text('连接手机'),
+                          ),
+                        ),
+                        if (widget.addRemoteDevice != null) ...[
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: widget.addRemoteDevice,
+                              icon: const Icon(Icons.add_link, size: 18),
+                              label: const Text('添加远程电脑'),
+                            ),
+                          ),
+                        ],
+                      ]),
                     ),
             ),
           ],
@@ -1639,6 +2112,7 @@ class _DeviceTile extends StatelessWidget {
     required this.revealed,
     required this.reveal,
     required this.collapse,
+    this.connecting = false,
   });
 
   final _PeerDevice device;
@@ -1650,9 +2124,33 @@ class _DeviceTile extends StatelessWidget {
   final VoidCallback reveal;
   final VoidCallback collapse;
 
+  /// Whether a dial to this device (fresh connect or LAN upgrade) is
+  /// currently in flight, per `_HomeScreenState._connectingPeerIds`.
+  final bool connecting;
+
+  /// "在线 · 局域网" / "在线 · Tailscale 远程" / "连接中 · Tailscale" / "离线 · X前".
+  /// A phone has no transport concept, so it only ever shows online/offline.
+  String _statusLabel(BuildContext context) {
+    if (connecting) {
+      return device.transport == PeerTransport.tailscale
+          ? '连接中 · Tailscale'
+          : '连接中…';
+    }
+    if (!device.online) return _lastSeenLabel(context, device.lastSeenAt);
+    switch (device.transport) {
+      case PeerTransport.lan:
+        return '在线 · 局域网';
+      case PeerTransport.tailscale:
+        return '在线 · Tailscale 远程';
+      case null:
+        return '在线';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final phone = device.name.contains('手机') || device.name.contains('iPhone');
+    final statusLabel = _statusLabel(context);
     final tile = Material(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: ListTile(
@@ -1668,9 +2166,7 @@ class _DeviceTile extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-        subtitle: Text(
-            device.online ? '在线' : _lastSeenLabel(context, device.lastSeenAt),
-            style: const TextStyle(fontSize: 12)),
+        subtitle: Text(statusLabel, style: const TextStyle(fontSize: 12)),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1704,10 +2200,7 @@ class _DeviceTile extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
             ),
-            subtitle: Text(
-              device.online ? '在线' : _lastSeenLabel(context, device.lastSeenAt),
-              style: const TextStyle(fontSize: 12),
-            ),
+            subtitle: Text(statusLabel, style: const TextStyle(fontSize: 12)),
           ),
         ),
         child: tile,
@@ -1939,9 +2432,16 @@ class _SwipeConversationTileState extends State<_SwipeConversationTile> {
 }
 
 class _PhoneConnectCard extends StatelessWidget {
-  const _PhoneConnectCard({required this.url, required this.onCollapse});
+  const _PhoneConnectCard({
+    required this.url,
+    required this.networkToggle,
+    required this.viaTailscale,
+    required this.onCollapse,
+  });
 
   final String url;
+  final Widget? networkToggle;
+  final bool viaTailscale;
   final VoidCallback onCollapse;
 
   @override
@@ -1963,9 +2463,16 @@ class _PhoneConnectCard extends StatelessWidget {
             ),
           ]),
           const SizedBox(height: 2),
-          const Text('用系统相机或微信扫一扫，无需安装 App。',
+          Text(
+              viaTailscale
+                  ? '手机需开启 Tailscale，用系统相机扫一扫，不在同一 Wi‑Fi 也能传。'
+                  : '用系统相机或微信扫一扫，无需安装 App。',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.black54)),
+              style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          if (networkToggle != null) ...[
+            const SizedBox(height: 8),
+            networkToggle!,
+          ],
           const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.all(8),
@@ -1986,14 +2493,49 @@ class _PhoneConnectCard extends StatelessWidget {
       );
 }
 
+/// Switches the phone QR code between the LAN and the Tailscale address.
+class _QrNetworkToggle extends StatelessWidget {
+  const _QrNetworkToggle({required this.useTailscale, required this.onChanged});
+
+  final bool useTailscale;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => SegmentedButton<bool>(
+        showSelectedIcon: false,
+        style: const ButtonStyle(visualDensity: VisualDensity.compact),
+        segments: const [
+          ButtonSegment(
+              value: false,
+              icon: Icon(Icons.wifi, size: 16),
+              label: Text('局域网')),
+          ButtonSegment(
+              value: true,
+              icon: Icon(Icons.vpn_lock_outlined, size: 16),
+              label: Text('Tailscale')),
+        ],
+        selected: {useTailscale},
+        onSelectionChanged: (values) => onChanged(values.first),
+      );
+}
+
 class _MobileConversationTitle extends StatelessWidget {
-  const _MobileConversationTitle({required this.name, required this.online});
+  const _MobileConversationTitle({
+    required this.name,
+    required this.online,
+    this.transport,
+    this.tailscaleAddress,
+  });
 
   final String name;
   final bool online;
+  final PeerTransport? transport;
+  final String? tailscaleAddress;
 
   @override
-  Widget build(BuildContext context) => Row(
+  Widget build(BuildContext context) {
+    final viaTailscale = online && transport == PeerTransport.tailscale;
+    return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Flexible(
@@ -2003,6 +2545,17 @@ class _MobileConversationTitle extends StatelessWidget {
                 style:
                     const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           ),
+          if (viaTailscale) ...[
+            const SizedBox(width: 6),
+            Tooltip(
+              message: tailscaleAddress == null
+                  ? '通过 Tailscale 远程连接\n回到同一 Wi-Fi 后自动切换到局域网'
+                  : '通过 Tailscale 远程连接（$tailscaleAddress）\n回到同一 Wi-Fi 后自动切换到局域网',
+              child: Icon(Icons.vpn_lock_outlined,
+                  size: 17,
+                  color: Theme.of(context).colorScheme.onSecondaryContainer),
+            ),
+          ],
           const SizedBox(width: 7),
           Tooltip(
             message: online ? '在线' : '离线',
@@ -2016,6 +2569,66 @@ class _MobileConversationTitle extends StatelessWidget {
           ),
         ],
       );
+  }
+}
+
+/// Desktop conversation header: the peer's name plus, for a computer peer
+/// connected over Tailscale, a "通过 Tailscale 连接" chip whose tooltip shows
+/// the actual address and reminds the user it will switch back to LAN
+/// automatically. Mobile shows the equivalent in the AppBar title instead
+/// (_MobileConversationTitle), so this is desktop-only.
+class _ConversationHeader extends StatelessWidget {
+  const _ConversationHeader({
+    required this.name,
+    required this.online,
+    this.transport,
+    this.tailscaleAddress,
+  });
+
+  final String name;
+  final bool online;
+  final PeerTransport? transport;
+  final String? tailscaleAddress;
+
+  @override
+  Widget build(BuildContext context) {
+    final viaTailscale = online && transport == PeerTransport.tailscale;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 14, 14, 14),
+      child: Row(children: [
+        Expanded(
+          child: Text(name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        ),
+        if (viaTailscale)
+          Tooltip(
+            message: tailscaleAddress == null
+                ? '通过 Tailscale 远程连接\n回到同一 Wi-Fi 后自动切换到局域网'
+                : '通过 Tailscale 远程连接（$tailscaleAddress）\n回到同一 Wi-Fi 后自动切换到局域网',
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.vpn_lock_outlined,
+                    size: 14,
+                    color: Theme.of(context).colorScheme.onSecondaryContainer),
+                const SizedBox(width: 4),
+                Text('通过 Tailscale 连接',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color:
+                            Theme.of(context).colorScheme.onSecondaryContainer)),
+              ]),
+            ),
+          ),
+      ]),
+    );
+  }
 }
 
 class _ConversationPanel extends StatefulWidget {
@@ -2038,6 +2651,8 @@ class _ConversationPanel extends StatefulWidget {
     required this.draft,
     required this.onDraftChanged,
     this.onMobileBack,
+    this.transport,
+    this.tailscaleAddress,
   });
 
   final TextEditingController controller;
@@ -2057,6 +2672,14 @@ class _ConversationPanel extends StatefulWidget {
   final String draft;
   final ValueChanged<String> onDraftChanged;
   final VoidCallback? onMobileBack;
+
+  /// How the selected computer peer is currently routed. Null for a phone
+  /// conversation or when the peer's transport isn't known.
+  final PeerTransport? transport;
+
+  /// The peer's Tailscale address, shown in the header tooltip so a user
+  /// dealing with a connection issue can see exactly what SendHere dialed.
+  final String? tailscaleAddress;
 
   @override
   State<_ConversationPanel> createState() => _ConversationPanelState();
@@ -2219,6 +2842,13 @@ class _ConversationPanelState extends State<_ConversationPanel> {
           clipBehavior: Clip.antiAlias,
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (!(Platform.isIOS || Platform.isAndroid))
+              _ConversationHeader(
+                name: widget.selectedPeerName!,
+                online: widget.online,
+                transport: widget.transport,
+                tailscaleAddress: widget.tailscaleAddress,
+              ),
             Expanded(
               child: Listener(
                 behavior: HitTestBehavior.translucent,
@@ -2432,7 +3062,7 @@ class _MessageBubble extends StatelessWidget {
                           ),
                         ],
                       ])
-                    : SelectableText(event.text ?? ''),
+                    : MessageText(event.text ?? ''),
               ),
               const SizedBox(height: 3),
               Text(

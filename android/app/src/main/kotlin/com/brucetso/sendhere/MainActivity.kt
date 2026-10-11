@@ -42,6 +42,7 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "open" -> openFile(file, result)
                     "saveImage" -> saveImage(file, result)
+                    "publishToDownloads" -> publishToDownloads(file, result)
                     else -> result.notImplemented()
                 }
             }
@@ -66,6 +67,69 @@ class MainActivity : FlutterActivity() {
         } catch (error: Exception) {
             result.error("open_failed", error.message ?: "无法打开文件", null)
         }
+    }
+
+    /**
+     * Makes a received file visible in the system Files app under
+     * Download/SendHere and returns the path the app should keep using.
+     * - Android 11+: moves it (the app may read files it created in shared
+     *   storage by path), so the file survives an uninstall.
+     * - Android 10: shared storage is not path-readable, so a copy is
+     *   published and the private original stays the in-app reference.
+     * - Android 9 and below: would need a storage permission; keep private.
+     */
+    private fun publishToDownloads(file: File, result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            result.success(file.path)
+            return
+        }
+        Thread {
+            try {
+                val mime = android.webkit.MimeTypeMap.getSingleton()
+                    .getMimeTypeFromExtension(file.extension.lowercase())
+                    ?: "application/octet-stream"
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, file.name)
+                    put(MediaStore.Downloads.MIME_TYPE, mime)
+                    put(MediaStore.Downloads.RELATIVE_PATH,
+                        Environment.DIRECTORY_DOWNLOADS + "/SendHere")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("无法创建下载文件")
+                try {
+                    contentResolver.openOutputStream(uri)?.use { output ->
+                        FileInputStream(file).use { input -> input.copyTo(output) }
+                    } ?: throw IllegalStateException("无法写入下载文件")
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    contentResolver.update(uri, values, null, null)
+                } catch (error: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    throw error
+                }
+                var finalPath = file.path
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    // MediaStore may rename on conflict ("a (1).pdf"); ask it.
+                    @Suppress("DEPRECATION")
+                    val published = contentResolver.query(
+                        uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    }
+                    if (published != null && File(published).canRead()) {
+                        file.delete()
+                        finalPath = published
+                    }
+                }
+                runOnUiThread { result.success(finalPath) }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    result.error("publish_failed", error.message ?: "无法保存到下载目录", null)
+                }
+            }
+        }.start()
     }
 
     private fun saveImage(file: File, result: MethodChannel.Result) {

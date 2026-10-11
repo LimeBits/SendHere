@@ -21,6 +21,8 @@ class TransferEvent {
     this.bytesTransferred,
     this.errorMessage,
     this.isComputerPeer = false,
+    this.peerTailscaleAddress,
+    this.peerPort,
   });
 
   final TransferEventType type;
@@ -38,4 +40,9 @@ class TransferEvent {
   final int? bytesTransferred;
   final String? errorMessage;
   final bool isComputerPeer;
+
+  /// Tailscale address a computer peer advertised in its identify message,
+  /// remembered so the two computers can reconnect when not on the same LAN.
+  final String? peerTailscaleAddress;
+  final int? peerPort;
 }

@@ -10,21 +10,40 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' show serve;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:shelf_web_socket/shelf_web_socket.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'transfer_event.dart';
+
+/// How a peer connection is currently routed. LAN is preferred: lower
+/// latency, no dependency on a third-party relay, and no mobile-data use.
+enum PeerTransport { lan, tailscale }
 
 class LocalTransferServer {
   LocalTransferServer({
     required this.downloadDirectory,
     String? deviceName,
     Future<List<int>> Function(String asset)? loadAsset,
+    bool Function(String address)? isTailscaleAddress,
+    this.onFileReceived,
   })  : deviceName = deviceName ?? Platform.localHostname,
-        _loadAsset = loadAsset ?? _loadFlutterAsset;
+        _loadAsset = loadAsset ?? _loadFlutterAsset,
+        _isTailscaleAddress = isTailscaleAddress ?? isTailscaleIpv4;
 
   final Directory downloadDirectory;
   final String deviceName;
   final Future<List<int>> Function(String asset) _loadAsset;
+
+  /// Called once a received file is fully written. May relocate it (e.g. to
+  /// Android's public Downloads) and returns the path the file now lives at;
+  /// that path is what the file event reports.
+  final Future<String> Function(File file)? onFileReceived;
+
+  /// Classifies an address as Tailscale vs LAN. Defaults to the real
+  /// CGNAT-range check ([isTailscaleIpv4]); tests inject a fake classifier
+  /// so the LAN-upgrade path can be exercised over plain loopback addresses
+  /// without binding a real 100.64.0.0/10 address.
+  final bool Function(String address) _isTailscaleAddress;
   final _events = StreamController<TransferEvent>.broadcast();
   final _sockets = <WebSocketChannel>{};
   final _files = <String, _DownloadFile>{};
@@ -35,7 +54,16 @@ class LocalTransferServer {
   final _peerSessions = <String, _PeerSession>{};
   final _peerSessionRequests = <String, Future<_PeerSession?>>{};
   final _peerEndpoints = <String, _PeerEndpoint>{};
+  final _peerTransports = <String, PeerTransport>{};
+  final _upgradingPeerIds = <String>{};
+  // Remembers a peer's transport for a brief window after its socket closes,
+  // so a replacement connection landing moments later (the other leg of a
+  // LAN <-> Tailscale upgrade, which is a second independent TCP connection
+  // that can arrive slightly before or after this one's close notice) is
+  // still recognised as an upgrade rather than a fresh, unrelated connect.
+  final _recentlyClosedPeerTransports = <String, PeerTransport>{};
   String? _localAddress;
+  String? _localTailscaleAddress;
   String? _localDeviceId;
 
   HttpServer? _server;
@@ -69,7 +97,10 @@ class LocalTransferServer {
       ..post('/api/text', _handleText)
       ..post('/api/upload', _handleUpload)
       ..get('/api/download/<id>', _handleDownload)
-      ..get('/ws', webSocketHandler(_handleSocket));
+      ..get(
+          '/ws',
+          webSocketHandler(_handleSocket,
+              pingInterval: const Duration(seconds: 8)));
 
     final handler = const Pipeline()
         .addMiddleware(_authorizationMiddleware)
@@ -95,6 +126,8 @@ class LocalTransferServer {
     _peerSessions.clear();
     _peerSessionRequests.clear();
     _peerTokens.clear();
+    _peerTransports.clear();
+    _upgradingPeerIds.clear();
     await _server?.close(force: true);
     _server = null;
   }
@@ -151,6 +184,32 @@ class LocalTransferServer {
         name.contains('wifi') ||
         name.contains('ethernet') ||
         name.contains('以太网');
+  }
+
+  /// Returns this device's Tailscale IPv4 addresses (100.64.0.0/10).
+  /// Detected by address range rather than interface name, because Tailscale
+  /// shows up as utun* on Apple platforms, "Tailscale" on Windows and tun0 on
+  /// Android.
+  Future<List<String>> tailscaleAddresses() async {
+    final result = <String>[];
+    for (final interface in await NetworkInterface.list()) {
+      for (final address in interface.addresses) {
+        if (address.type == InternetAddressType.IPv4 &&
+            isTailscaleIpv4(address.address)) {
+          result.add(address.address);
+        }
+      }
+    }
+    return result.toSet().toList();
+  }
+
+  /// Whether [value] is in Tailscale's CGNAT range 100.64.0.0/10.
+  static bool isTailscaleIpv4(String value) {
+    final octets = value.split('.').map(int.tryParse).toList();
+    if (octets.length != 4 || octets.any((octet) => octet == null)) {
+      return false;
+    }
+    return octets[0] == 100 && octets[1]! >= 64 && octets[1]! <= 127;
   }
 
   static bool _isPrivateIpv4(String value) {
@@ -222,7 +281,16 @@ class LocalTransferServer {
     _peerTokens.removeWhere((_, expiry) => DateTime.now().isAfter(expiry));
     final token = _newToken();
     _peerTokens[token] = DateTime.now().add(const Duration(minutes: 5));
-    return Response.ok(jsonEncode({'token': token, 'name': deviceName}),
+    // Device ID and Tailscale address are not secrets (the ID is already in
+    // mDNS TXT records); they let the dialing side remember this computer.
+    return Response.ok(
+        jsonEncode({
+          'token': token,
+          'name': deviceName,
+          if (_localDeviceId != null) 'id': _localDeviceId,
+          if (_localTailscaleAddress != null)
+            'tailscaleAddress': _localTailscaleAddress,
+        }),
         headers: {'content-type': 'application/json; charset=utf-8'});
   }
 
@@ -295,17 +363,26 @@ class LocalTransferServer {
       await sink.close();
     }
     final size = await destination.length();
+    var finalPath = destination.path;
+    final hook = onFileReceived;
+    if (hook != null) {
+      try {
+        finalPath = await hook(destination);
+      } catch (_) {
+        // Relocation is best effort; the file is still in downloadDirectory.
+      }
+    }
     _events.add(TransferEvent(
         type: TransferEventType.file,
         createdAt: DateTime.now(),
-        fileName: path.basename(destination.path),
+        fileName: path.basename(finalPath),
         fileSize: size,
         clientName: clientName,
         deviceId: deviceId,
-        localPath: destination.path));
+        localPath: finalPath));
     _broadcast({
       'type': 'file_received',
-      'fileName': path.basename(destination.path),
+      'fileName': path.basename(finalPath),
       'fileSize': size,
     });
   }
@@ -325,6 +402,12 @@ class LocalTransferServer {
     });
   }
 
+  /// Dials [deviceId] at [address]:[peerPort]. If that peer is already
+  /// connected over Tailscale and [address] is a LAN address, this proceeds
+  /// as a silent upgrade: a successful `/api/peer-session` round trip over
+  /// the LAN address already proves it is reachable, so the old Tailscale
+  /// socket is only closed once the new LAN socket takes its place in
+  /// [_peerSockets], and the UI never shows the device as briefly offline.
   Future<void> connectToPeer({
     required String deviceId,
     required String deviceName,
@@ -332,9 +415,16 @@ class LocalTransferServer {
     required int peerPort,
     required String localDeviceId,
   }) async {
+    final isUpgrade = hasPeer(deviceId) &&
+        _peerTransports[deviceId] == PeerTransport.tailscale &&
+        !_isTailscaleAddress(address);
+    if (hasPeer(deviceId) && !isUpgrade) return;
+    if (isUpgrade) {
+      if (_upgradingPeerIds.contains(deviceId)) return;
+      _upgradingPeerIds.add(deviceId);
+    }
     final client = HttpClient();
     try {
-      if (hasPeer(deviceId)) return;
       final uri = Uri(
           scheme: 'http',
           host: address,
@@ -348,13 +438,24 @@ class LocalTransferServer {
       final body =
           jsonDecode(await utf8.decodeStream(response)) as Map<String, dynamic>;
       final token = body['token'] as String;
+      final advertised = body['tailscaleAddress'] as String?;
+      final peerTailscale = _isTailscaleAddress(address)
+          ? address
+          : advertised != null && isTailscaleIpv4(advertised)
+              ? advertised
+              : null;
       final socketUri = Uri(
           scheme: 'ws',
           host: address,
           port: peerPort,
           path: '/ws',
           queryParameters: {'token': token});
-      final socket = WebSocketChannel.connect(socketUri);
+      // A ping keepalive matches the server's and lets a dead TCP path (Wi-Fi
+      // dropped, Tailscale route gone) surface via onDone within seconds
+      // instead of the OS's much longer default TCP timeout, so the LAN <->
+      // Tailscale fallback/upgrade logic reacts promptly.
+      final socket = IOWebSocketChannel.connect(socketUri,
+          pingInterval: const Duration(seconds: 8));
       _peerSessions[deviceId] = _PeerSession(
           deviceId: deviceId,
           deviceName: deviceName,
@@ -362,22 +463,43 @@ class LocalTransferServer {
           baseUri: Uri(scheme: 'http', host: address, port: peerPort),
           token: token,
           expiresAt: DateTime.now().add(const Duration(minutes: 4)));
-      _registerSocket(socket, name: deviceName, id: deviceId, isPeer: true);
+      final dialedTailscale = _isTailscaleAddress(address);
+      _registerSocket(socket,
+          name: deviceName,
+          id: deviceId,
+          isPeer: true,
+          transport: dialedTailscale ? PeerTransport.tailscale : PeerTransport.lan,
+          isUpgrade: isUpgrade,
+          peerTailscaleAddress: peerTailscale,
+          peerPort: peerPort);
+      // Advertise the address reachable on the same network we just dialed
+      // on, not just whichever address we happen to prefer. Dialing [address]
+      // over Tailscale but advertising our LAN address would hand the peer a
+      // callback address it cannot reach, breaking its own reconnect retries.
+      final callbackAddress = dialedTailscale
+          ? _localTailscaleAddress ?? _localAddress
+          : _localAddress ?? _localTailscaleAddress;
       socket.sink.add(jsonEncode({
         'type': 'identify',
         'name': this.deviceName,
         'id': localDeviceId,
         'peer': true,
-        'address': _localAddress,
+        'address': callbackAddress,
+        'tailscaleAddress': _localTailscaleAddress,
         'port': port,
       }));
     } finally {
       client.close(force: true);
+      _upgradingPeerIds.remove(deviceId);
     }
   }
 
   bool hasPeer(String deviceId) => _peerSockets.containsKey(deviceId);
   bool hasDevice(String deviceId) => _clientIds.values.contains(deviceId);
+
+  /// How [deviceId]'s connection is currently routed, or null if not
+  /// connected as a peer.
+  PeerTransport? peerTransport(String deviceId) => _peerTransports[deviceId];
 
   /// Removes a desktop that has disappeared from LAN discovery immediately,
   /// rather than waiting for the operating system's TCP timeout.
@@ -390,11 +512,51 @@ class LocalTransferServer {
   }
 
   void setLocalEndpoint({
-    required String address,
+    required String? address,
     required String deviceId,
+    String? tailscaleAddress,
   }) {
     _localAddress = address;
     _localDeviceId = deviceId;
+    _localTailscaleAddress = tailscaleAddress;
+  }
+
+  /// Probes a SendHere instance at [address]:[port] (LAN or Tailscale) and
+  /// returns its device name and ID, or null when nothing answers.
+  static Future<({String name, String? id})?> probe(String address, int port,
+      {Duration timeout = const Duration(seconds: 4)}) async {
+    final client = HttpClient()..connectionTimeout = timeout;
+    try {
+      final request = await client
+          .getUrl(Uri(
+              scheme: 'http', host: address, port: port, path: '/api/status'))
+          .timeout(timeout);
+      final response = await request.close().timeout(timeout);
+      await response.drain<void>();
+      // /api/status needs a token; a 403 still proves SendHere is listening.
+      if (response.statusCode != HttpStatus.forbidden &&
+          response.statusCode != HttpStatus.ok) {
+        return null;
+      }
+      final session = await client
+          .getUrl(Uri(
+              scheme: 'http',
+              host: address,
+              port: port,
+              path: '/api/peer-session'))
+          .timeout(timeout);
+      final sessionResponse = await session.close().timeout(timeout);
+      if (sessionResponse.statusCode != HttpStatus.ok) return null;
+      final body = jsonDecode(await utf8.decodeStream(sessionResponse))
+          as Map<String, dynamic>;
+      final name = body['name'] as String?;
+      if (name == null) return null;
+      return (name: name, id: body['id'] as String?);
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
   }
 
   void updatePeerEndpoint({
@@ -466,6 +628,10 @@ class LocalTransferServer {
     } on HttpException {
       return null;
     } on FormatException {
+      return null;
+    } on IOException {
+      // Includes connection resets when the peer goes away mid-request,
+      // which is routine over Tailscale or when an app quits.
       return null;
     } finally {
       client.close(force: true);
@@ -696,20 +862,50 @@ class LocalTransferServer {
 
   void _handleSocket(WebSocketChannel socket) => _registerSocket(socket);
 
+  /// Replaces [deviceId]'s current peer socket with [socket] and closes the
+  /// old one, if any, after the new one is already in place. Used for both
+  /// directions of a LAN upgrade: the dialing side swaps immediately since it
+  /// knows the transport before sending identify, and the receiving side
+  /// swaps once the new socket's identify arrives.
+  void _swapPeerSocket(
+      String deviceId, WebSocketChannel socket, PeerTransport transport) {
+    final previous = _peerSockets[deviceId];
+    _peerSockets[deviceId] = socket;
+    _peerTransports[deviceId] = transport;
+    if (previous != null && previous != socket) {
+      previous.sink.close(WebSocketStatus.normalClosure, 'Upgraded transport');
+    }
+  }
+
   void _registerSocket(WebSocketChannel socket,
-      {String name = '手机', String? id, bool isPeer = false}) {
+      {String name = '手机',
+      String? id,
+      bool isPeer = false,
+      PeerTransport transport = PeerTransport.lan,
+      bool isUpgrade = false,
+      String? peerTailscaleAddress,
+      int? peerPort}) {
     _sockets.add(socket);
     _clients[socket] = name;
     if (id != null) _clientIds[socket] = id;
-    if (isPeer && id != null) _peerSockets[id] = socket;
+    if (isPeer && id != null) {
+      if (isUpgrade) {
+        _swapPeerSocket(id, socket, transport);
+      } else {
+        _peerSockets[id] = socket;
+        _peerTransports[id] = transport;
+      }
+    }
     var connectedEventAdded = isPeer;
-    if (isPeer) {
+    if (isPeer && !isUpgrade) {
       _events.add(TransferEvent(
           type: TransferEventType.clientConnected,
           createdAt: DateTime.now(),
           clientName: name,
           deviceId: id,
-          isComputerPeer: true));
+          isComputerPeer: true,
+          peerTailscaleAddress: peerTailscaleAddress,
+          peerPort: peerPort));
     }
     socket.stream.listen((message) {
       try {
@@ -735,27 +931,58 @@ class LocalTransferServer {
             );
             unawaited(_ensurePeerUploadSession(identifiedId));
           }
+          var isLanUpgrade = false;
           if (peer) {
+            // The dialer's callback address (identify's `address` field) is
+            // set to its Tailscale address whenever it dialed us over
+            // Tailscale (see connectToPeer's callbackAddress), so classifying
+            // that single field is equivalent to and simpler than cross
+            // -checking it against the separate `tailscaleAddress` field.
+            final incomingTransport = peerAddress != null &&
+                    _isTailscaleAddress(peerAddress)
+                ? PeerTransport.tailscale
+                : PeerTransport.lan;
             final existingSocket = _peerSockets[identifiedId];
-            if (existingSocket != null && existingSocket != socket) {
+            // The old leg's socket may have already closed by the time this
+            // identify is processed (the two legs are independent TCP
+            // connections racing each other), so fall back to the transport
+            // it was last known to use.
+            final existingTransport = _peerTransports[identifiedId] ??
+                _recentlyClosedPeerTransports[identifiedId];
+            isLanUpgrade = existingTransport == PeerTransport.tailscale &&
+                incomingTransport == PeerTransport.lan &&
+                (existingSocket == null || existingSocket != socket);
+            if (existingSocket != null &&
+                existingSocket != socket &&
+                !isLanUpgrade) {
               socket.sink.close(
                   WebSocketStatus.normalClosure, 'Duplicate peer connection');
               return;
             }
-            _peerSockets[identifiedId] = socket;
+            _recentlyClosedPeerTransports.remove(identifiedId);
+            _swapPeerSocket(identifiedId, socket, incomingTransport);
           }
           if (!connectedEventAdded) {
             connectedEventAdded = true;
           }
           // An already connected phone can rename itself from its browser;
-          // publish the new identity so the desktop list stays in sync.
-          if (identifiedId != null) {
+          // publish the new identity so the desktop list stays in sync. A
+          // transport upgrade on an already-online peer must not replay a
+          // clientConnected event: the UI treats that as a fresh connection
+          // and would reset message state unnecessarily.
+          if (identifiedId != null && !isLanUpgrade && !isUpgrade) {
+            final tailscale = data['tailscaleAddress'] as String?;
             _events.add(TransferEvent(
                 type: TransferEventType.clientConnected,
                 createdAt: DateTime.now(),
                 clientName: identifiedName,
                 deviceId: identifiedId,
-                isComputerPeer: peer));
+                isComputerPeer: peer,
+                peerTailscaleAddress:
+                    peer && tailscale != null && isTailscaleIpv4(tailscale)
+                        ? tailscale
+                        : null,
+                peerPort: peer ? peerPort : null));
           }
         } else if (data['type'] == 'peer_text' && _clientIds[socket] != null) {
           _events.add(TransferEvent(
@@ -769,19 +996,50 @@ class LocalTransferServer {
     }, onDone: () {
       final name = _clients.remove(socket) ?? '手机';
       final deviceId = _clientIds.remove(socket);
-      if (deviceId != null && _peerSockets[deviceId] == socket) {
+      final wasCurrentPeerSocket =
+          deviceId != null && _peerSockets[deviceId] == socket;
+      if (wasCurrentPeerSocket) {
+        final closedTransport = _peerTransports[deviceId];
+        if (closedTransport != null) {
+          _recentlyClosedPeerTransports[deviceId] = closedTransport;
+          Timer(const Duration(milliseconds: 800), () {
+            if (_recentlyClosedPeerTransports[deviceId] == closedTransport) {
+              _recentlyClosedPeerTransports.remove(deviceId);
+            }
+          });
+        }
         _peerSockets.remove(deviceId);
         _peerSessions.remove(deviceId);
+        _peerTransports.remove(deviceId);
       }
       _sockets.remove(socket);
-      final hasReplacement = deviceId != null &&
-          _clientIds.entries.any((entry) => entry.value == deviceId);
-      if (deviceId != null && !hasReplacement) {
-        _events.add(TransferEvent(
-            type: TransferEventType.clientDisconnected,
-            createdAt: DateTime.now(),
-            clientName: name,
-            deviceId: deviceId));
+      void publishDisconnectUnlessReplaced() {
+        final hasReplacement = deviceId != null &&
+            _clientIds.entries.any((entry) => entry.value == deviceId);
+        if (deviceId != null && !hasReplacement) {
+          _events.add(TransferEvent(
+              type: TransferEventType.clientDisconnected,
+              createdAt: DateTime.now(),
+              clientName: name,
+              deviceId: deviceId));
+        }
+      }
+
+      if (wasCurrentPeerSocket) {
+        // A LAN upgrade closes the old transport's socket deliberately, but
+        // the two legs are independent TCP connections: the new one's
+        // identify can arrive on the peer either just before or just after
+        // this close notification, depending on OS scheduling. Give the
+        // replacement a brief window to land before concluding the peer
+        // actually went offline, so a transport swap never flashes
+        // disconnected/reconnected in the UI. This only applies to peer
+        // (computer) sockets: `isPeer` is the dial-time flag and is always
+        // false for inbound sockets, so wasCurrentPeerSocket -- whether this
+        // socket was actually registered as the peer connection -- is the
+        // correct signal for both directions.
+        Timer(const Duration(milliseconds: 800), publishDisconnectUnlessReplaced);
+      } else {
+        publishDisconnectUnlessReplaced();
       }
     });
   }

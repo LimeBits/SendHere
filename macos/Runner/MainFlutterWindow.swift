@@ -1,17 +1,31 @@
 import Cocoa
 import FlutterMacOS
 
+/// The visual highlight should never steal a drop from the native composer.
+private final class DropHighlightView: NSView {
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Native drag destination around Flutter's root view. Finder file drops are
 /// resolved in the content-view hierarchy, so this parent view receives drops
 /// across the conversation area while Flutter retains normal input handling.
-private final class ConversationDropView: NSView {
+final class ConversationDropView: NSView {
   private static let conversationPaneMinX: CGFloat = 316
 
   var onFilesDropped: (([String]) -> Void)?
 
-  private let dropOverlay = NSView()
+  private let dropOverlay = DropHighlightView()
   private let dropCard = NSVisualEffectView()
   private let dropTitle = NSTextField(labelWithString: "松手完成添加")
+  private var composerDropActive = false
+
+  /// Called by the native text field when the drag moves over the composer.
+  /// AppKit routes the drag to that child, so our own draggingExited must not
+  /// clear the highlight until the child has finished with it.
+  func setComposerDropActive(_ active: Bool) {
+    composerDropActive = active
+    dropOverlay.isHidden = !active
+  }
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -44,7 +58,13 @@ private final class ConversationDropView: NSView {
   }
 
   override func draggingExited(_ sender: NSDraggingInfo?) {
-    hideDropOverlay()
+    // Moving from the conversation's Flutter surface to the native editor
+    // transfers drag ownership between AppKit views. Wait one run-loop turn
+    // for the editor's draggingEntered before clearing the shared highlight.
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+      if !self.composerDropActive { self.hideDropOverlay() }
+    }
   }
 
   override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -90,7 +110,7 @@ private final class ConversationDropView: NSView {
 
   private func updateDropOverlay(for sender: NSDraggingInfo) -> NSDragOperation {
     let acceptsDrop = !droppedPaths(from: sender).isEmpty && isConversationDrop(sender)
-    dropOverlay.isHidden = !acceptsDrop
+    dropOverlay.isHidden = !acceptsDrop && !composerDropActive
     return acceptsDrop ? .copy : []
   }
 
@@ -99,6 +119,7 @@ private final class ConversationDropView: NSView {
   }
 
   private func hideDropOverlay() {
+    composerDropActive = false
     dropOverlay.isHidden = true
   }
 

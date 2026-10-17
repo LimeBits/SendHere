@@ -19,6 +19,7 @@ private func droppedFilePaths(from sender: NSDraggingInfo) -> [String] {
 
 final class SendHereTextView: NSTextView {
   var onFilesDropped: (([String]) -> Void)?
+  var onFileDragActiveChanged: ((Bool) -> Void)?
 
   override var acceptsFirstResponder: Bool { true }
 
@@ -28,11 +29,19 @@ final class SendHereTextView: NSTextView {
     }
     NSApp.activate(ignoringOtherApps: true)
     window?.makeKeyAndOrderFront(nil)
+    onFileDragActiveChanged?(true)
     return .copy
   }
 
   override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-    droppedFilePaths(from: sender).isEmpty ? super.draggingUpdated(sender) : .copy
+    let hasFiles = !droppedFilePaths(from: sender).isEmpty
+    onFileDragActiveChanged?(hasFiles)
+    return hasFiles ? .copy : super.draggingUpdated(sender)
+  }
+
+  override func draggingExited(_ sender: NSDraggingInfo?) {
+    onFileDragActiveChanged?(false)
+    super.draggingExited(sender)
   }
 
   override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -42,11 +51,13 @@ final class SendHereTextView: NSTextView {
   override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
     let paths = droppedFilePaths(from: sender)
     guard !paths.isEmpty else { return super.performDragOperation(sender) }
+    onFileDragActiveChanged?(false)
     onFilesDropped?(paths)
     return true
   }
 
   override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+    onFileDragActiveChanged?(false)
     super.concludeDragOperation(sender)
     window?.makeFirstResponder(self)
   }
@@ -63,6 +74,7 @@ final class SendHereTextView: NSTextView {
 
 final class SendHereScrollView: NSScrollView {
   var onFilesDropped: (([String]) -> Void)?
+  var onFileDragActiveChanged: ((Bool) -> Void)?
 
   override var acceptsFirstResponder: Bool { true }
 
@@ -72,11 +84,19 @@ final class SendHereScrollView: NSScrollView {
     }
     NSApp.activate(ignoringOtherApps: true)
     window?.makeKeyAndOrderFront(nil)
+    onFileDragActiveChanged?(true)
     return .copy
   }
 
   override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-    droppedFilePaths(from: sender).isEmpty ? super.draggingUpdated(sender) : .copy
+    let hasFiles = !droppedFilePaths(from: sender).isEmpty
+    onFileDragActiveChanged?(hasFiles)
+    return hasFiles ? .copy : super.draggingUpdated(sender)
+  }
+
+  override func draggingExited(_ sender: NSDraggingInfo?) {
+    onFileDragActiveChanged?(false)
+    super.draggingExited(sender)
   }
 
   override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -86,11 +106,13 @@ final class SendHereScrollView: NSScrollView {
   override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
     let paths = droppedFilePaths(from: sender)
     guard !paths.isEmpty else { return super.performDragOperation(sender) }
+    onFileDragActiveChanged?(false)
     onFilesDropped?(paths)
     return true
   }
 
   override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+    onFileDragActiveChanged?(false)
     super.concludeDragOperation(sender)
     if let editor = documentView as? NSTextView {
       window?.makeFirstResponder(editor)
@@ -133,10 +155,16 @@ final class NativeTextView: NSObject, NSTextViewDelegate {
       NSLog("[SendHere.Input] Dropped %d file(s)", paths.count)
       self?.channel.invokeMethod("filesDropped", arguments: paths)
     }
+    let onFileDragActiveChanged: (Bool) -> Void = { [weak self] active in
+      guard let container = self?.scrollView.window?.contentView as? ConversationDropView else { return }
+      container.setComposerDropActive(active)
+    }
     textView.registerForDraggedTypes([.fileURL, .URL])
     textView.onFilesDropped = onFilesDropped
+    textView.onFileDragActiveChanged = onFileDragActiveChanged
     scrollView.registerForDraggedTypes([.fileURL, .URL])
     scrollView.onFilesDropped = onFilesDropped
+    scrollView.onFileDragActiveChanged = onFileDragActiveChanged
     textView.isEditable = true
     textView.isSelectable = true
     textView.isRichText = false

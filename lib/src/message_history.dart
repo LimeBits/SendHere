@@ -45,8 +45,9 @@ class MessageHistory {
       return (event.text ?? '').isNotEmpty;
     }
     if (event.type == TransferEventType.file) {
-      return event.fileStatus == FileTransferStatus.completed &&
-          event.localPath != null;
+      // Sent non-image files are stored without a local path (see
+      // TransferEvent.withoutUnkeptSentCopy), so completion alone decides.
+      return event.fileStatus == FileTransferStatus.completed;
     }
     return false;
   }

@@ -513,8 +513,10 @@ class _SendHereHomeState extends State<SendHereHome>
     // _events is newest-first. Pending outbox items take precedence over a
     // stale history entry sharing their transferId.
     _events
-      ..addAll(_history.items.where((event) =>
-          event.transferId == null || !outboxIds.contains(event.transferId)))
+      ..addAll(_history.items
+          .where((event) =>
+              event.transferId == null || !outboxIds.contains(event.transferId))
+          .map((event) => event.withoutUnkeptSentCopy()))
       ..addAll(_outbox.items.map(_eventForOutbox))
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     await _loadRecentDevices();
@@ -571,7 +573,8 @@ class _SendHereHomeState extends State<SendHereHome>
         onFileReceived: Platform.isAndroid ? _publishToAndroidDownloads : null,
       );
       await server.start();
-      _subscription = server.events.listen((event) {
+      _subscription = server.events.listen((incoming) {
+        final event = incoming.withoutUnkeptSentCopy();
         if (!mounted) return;
         final shouldCollapsePhoneQr = _phoneQrExpanded &&
             event.type == TransferEventType.clientConnected &&
@@ -1298,10 +1301,14 @@ class _SendHereHomeState extends State<SendHereHome>
             );
           }
           await _outbox.remove(item.id);
-          // Keep the app-owned source after delivery. Conversation thumbnails,
-          // image preview and the user's later “save/download” action all refer
-          // to this immutable copy; deleting it made successfully sent desktop
-          // images appear as unreadable files.
+          // Images keep their app-owned copy: thumbnails, preview and the
+          // later "save" action all read it. Other files are not needed once
+          // delivered, so their copy is removed to avoid growing storage.
+          if (item.isFile &&
+              item.filePath != null &&
+              !isImageFileName(item.fileName)) {
+            await _deleteArchivedFile(item.filePath!);
+          }
         } catch (error) {
           await _setOutboxStatus(
             item,
@@ -3093,19 +3100,7 @@ class _MessageBubble extends StatelessWidget {
     return '${sent ? '已发送' : '已接收'} · $time';
   }
 
-  bool _isImage(String? fileName) {
-    const extensions = {
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.gif',
-      '.webp',
-      '.bmp',
-      '.heic'
-    };
-    final name = fileName?.toLowerCase() ?? '';
-    return extensions.any(name.endsWith);
-  }
+  bool _isImage(String? fileName) => isImageFileName(fileName);
 }
 
 class _TransferProgress extends StatelessWidget {

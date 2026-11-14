@@ -99,6 +99,41 @@ void main() {
     expect(reloaded.items.every((e) => e.deviceId == 'phone'), isTrue);
   });
 
+  test('sent non-image files drop their app copy, images keep it', () {
+    TransferEvent sent(String name) => TransferEvent(
+          type: TransferEventType.file,
+          direction: TransferDirection.sent,
+          createdAt: DateTime(2026),
+          fileName: name,
+          fileSize: 3,
+          localPath: '/outbox/$name',
+          deviceId: 'phone',
+          transferId: name,
+          fileStatus: FileTransferStatus.completed,
+        );
+
+    expect(sent('app.dmg').withoutUnkeptSentCopy().localPath, isNull);
+    expect(sent('pic.JPG').withoutUnkeptSentCopy().localPath, '/outbox/pic.JPG');
+    final uploading = TransferEvent(
+      type: TransferEventType.file,
+      direction: TransferDirection.sent,
+      createdAt: DateTime(2026),
+      fileName: 'app.dmg',
+      localPath: '/outbox/app.dmg',
+      deviceId: 'phone',
+      fileStatus: FileTransferStatus.uploading,
+    );
+    expect(uploading.withoutUnkeptSentCopy().localPath, '/outbox/app.dmg');
+    final received = TransferEvent(
+      type: TransferEventType.file,
+      createdAt: DateTime(2026),
+      fileName: 'a.zip',
+      localPath: '/Downloads/a.zip',
+      deviceId: 'phone',
+    );
+    expect(received.withoutUnkeptSentCopy().localPath, '/Downloads/a.zip');
+  });
+
   test('a corrupt history file does not throw', () async {
     await File('${directory.path}/message-history-v1.json')
         .writeAsString('{not json');

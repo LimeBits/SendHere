@@ -16,6 +16,23 @@ class AppUpdate {
   final String url;
 }
 
+enum UpdateStatus { available, upToDate, failed }
+
+/// Result of one update check. [update] is set only when [status] is
+/// [UpdateStatus.available].
+
+class UpdateCheckResult {
+  const UpdateCheckResult._(this.status, this.update);
+
+  const UpdateCheckResult.upToDate() : this._(UpdateStatus.upToDate, null);
+  const UpdateCheckResult.failed() : this._(UpdateStatus.failed, null);
+  UpdateCheckResult.available(AppUpdate update)
+      : this._(UpdateStatus.available, update);
+
+  final UpdateStatus status;
+  final AppUpdate? update;
+}
+
 /// Reads the newest GitHub Release. Tags look like `v0.1.0-build50`.
 /// Draft and pre-releases are excluded by GitHub's `releases/latest` endpoint.
 class UpdateChecker {
@@ -26,9 +43,10 @@ class UpdateChecker {
     return match == null ? null : int.tryParse(match.group(1)!);
   }
 
-  /// Returns the newer release, or null when up to date or the check fails.
-  /// Failures stay silent: an update check must never disturb the app.
-  static Future<AppUpdate?> checkLatest({int currentBuild = sendHereBuildNumber}) async {
+  /// Asks GitHub for the newest release and compares its build number.
+  static Future<UpdateCheckResult> check({
+    int currentBuild = sendHereBuildNumber,
+  }) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final request = await client.getUrl(Uri.parse(_latestReleaseUrl));
@@ -36,19 +54,20 @@ class UpdateChecker {
         ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
         ..set(HttpHeaders.userAgentHeader, 'SendHere/$currentBuild');
       final response = await request.close().timeout(const Duration(seconds: 10));
-      if (response.statusCode != 200) return null;
+      if (response.statusCode != 200) return const UpdateCheckResult.failed();
       final body = await response.transform(utf8.decoder).join();
       final json = jsonDecode(body) as Map<String, dynamic>;
       final tag = json['tag_name'] as String? ?? '';
       final build = parseBuildNumber(tag);
-      if (build == null || build <= currentBuild) return null;
-      return AppUpdate(
+      if (build == null) return const UpdateCheckResult.failed();
+      if (build <= currentBuild) return const UpdateCheckResult.upToDate();
+      return UpdateCheckResult.available(AppUpdate(
         tag: tag,
         build: build,
         url: json['html_url'] as String? ?? releasesPageUrl,
-      );
+      ));
     } catch (_) {
-      return null;
+      return const UpdateCheckResult.failed();
     } finally {
       client.close(force: true);
     }

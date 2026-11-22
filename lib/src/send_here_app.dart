@@ -382,8 +382,12 @@ class _SendHereHomeState extends State<SendHereHome>
   static const _unreadCountsKey = 'sendhere-unread-counts';
   static const _qrUseTailscaleKey = 'sendhere-qr-use-tailscale';
   static const _skippedUpdateBuildKey = 'sendhere-skipped-update-build';
+  static const _updateCheckInterval = Duration(hours: 6);
+  static const _updateChannel = MethodChannel('sendhere/update');
   static const _conversationDropChannel =
       MethodChannel('sendhere/conversation_drop');
+  Timer? _updateTimer;
+  bool _checkingUpdate = false;
 
   @override
   void initState() {
@@ -397,52 +401,97 @@ class _SendHereHomeState extends State<SendHereHome>
         await _addFilesToPending(paths);
       }
     });
+    _updateChannel.setMethodCallHandler((call) async {
+      if (call.method == 'checkForUpdates') {
+        await _checkForUpdate(manual: true);
+      }
+    });
     _loadInitialState().whenComplete(() async {
       await _updateNotificationBadge();
       await _refreshNotificationPermission(request: true);
       await _startServer();
       unawaited(_checkForUpdate());
+      _updateTimer = Timer.periodic(_updateCheckInterval, (_) {
+        unawaited(_checkForUpdate());
+      });
     });
   }
 
-  /// Runs on each launch. Unsigned builds are not auto-installed; the user
-  /// downloads the new DMG from the release page.
-  Future<void> _checkForUpdate() async {
-    if (!Platform.isMacOS) return;
-    final update = await UpdateChecker.checkLatest();
-    if (update == null || !mounted) return;
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getInt(_skippedUpdateBuildKey) == update.build) return;
+  /// Checks GitHub for a newer build. The automatic check runs on launch and
+  /// then every few hours while the app stays open. A manual check (menu item)
+  /// always shows its result, including "already latest" and failures, and it
+  /// ignores the "skip this version" choice.
+  Future<void> _checkForUpdate({bool manual = false}) async {
+    if (!Platform.isMacOS || _checkingUpdate) return;
+    _checkingUpdate = true;
+    try {
+      final result = await UpdateChecker.check();
+      if (!mounted) return;
+      if (result.status == UpdateStatus.failed) {
+        if (manual) {
+          await _showUpdateMessage('检查更新失败', '无法连接 GitHub，请稍后再试。');
+        }
+        return;
+      }
+      if (result.status == UpdateStatus.upToDate) {
+        if (manual) {
+          await _showUpdateMessage('已是最新版本', 'SendHere build $sendHereBuildNumber 已是最新。');
+        }
+        return;
+      }
+      final update = result.update!;
+      final prefs = await SharedPreferences.getInstance();
+      if (!manual && prefs.getInt(_skippedUpdateBuildKey) == update.build) return;
+      if (!mounted) return;
+      final action = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('发现新版本 ${update.tag}'),
+          content: Text(
+            '当前是 build $sendHereBuildNumber，最新是 build ${update.build}。\n'
+            '下载 DMG 后，把 SendHere 拖到“应用程序”里覆盖旧版本即可。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'skip'),
+              child: const Text('跳过此版本'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'later'),
+              child: const Text('稍后'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, 'open'),
+              child: const Text('下载更新'),
+            ),
+          ],
+        ),
+      );
+      if (action == 'skip') {
+        await prefs.setInt(_skippedUpdateBuildKey, update.build);
+      } else if (action == 'open') {
+        await Process.run('open', [update.url]);
+      }
+    } finally {
+      _checkingUpdate = false;
+    }
+  }
+
+  Future<void> _showUpdateMessage(String title, String body) async {
     if (!mounted) return;
-    final action = await showDialog<String>(
+    await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('发现新版本 ${update.tag}'),
-        content: Text(
-          '当前是 build $sendHereBuildNumber，最新是 build ${update.build}。\n'
-          '下载 DMG 后，把 SendHere 拖到“应用程序”里覆盖旧版本即可。',
-        ),
+        title: Text(title),
+        content: Text(body),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, 'skip'),
-            child: const Text('跳过此版本'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, 'later'),
-            child: const Text('稍后'),
-          ),
           FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, 'open'),
-            child: const Text('下载更新'),
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('好'),
           ),
         ],
       ),
     );
-    if (action == 'skip') {
-      await prefs.setInt(_skippedUpdateBuildKey, update.build);
-    } else if (action == 'open') {
-      await Process.run('open', [update.url]);
-    }
   }
 
   @override
@@ -1547,6 +1596,8 @@ class _SendHereHomeState extends State<SendHereHome>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _conversationDropChannel.setMethodCallHandler(null);
+    _updateChannel.setMethodCallHandler(null);
+    _updateTimer?.cancel();
     _tailscaleReconnectTimer?.cancel();
     _subscription?.cancel();
     _nearbySubscription?.cancel();

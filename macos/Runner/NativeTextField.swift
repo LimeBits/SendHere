@@ -70,6 +70,44 @@ final class SendHereTextView: NSTextView {
     }
     return super.performKeyEquivalent(with: event)
   }
+
+  /// Pasting an image copied from another app (screenshot, web image, Preview)
+  /// has no file URL on the pasteboard. Write it to a temporary PNG and hand it
+  /// to the same path used for drag-and-drop, so it is queued like a file.
+  /// Plain text and file-URL pastes keep the normal NSTextView behaviour.
+  override func paste(_ sender: Any?) {
+    let pasteboard = NSPasteboard.general
+    let hasText = pasteboard.canReadObject(forClasses: [NSString.self], options: nil)
+    let fileOptions: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+    let hasFileURL = !((pasteboard.readObjects(forClasses: [NSURL.self], options: fileOptions) as? [URL]) ?? []).isEmpty
+    if !hasText && !hasFileURL, let png = Self.pngData(from: pasteboard),
+       let path = Self.writeTemporaryImage(png) {
+      onFilesDropped?([path])
+      return
+    }
+    super.paste(sender)
+  }
+
+  private static func pngData(from pasteboard: NSPasteboard) -> Data? {
+    guard let image = NSImage(pasteboard: pasteboard),
+          let tiff = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+    return bitmap.representation(using: .png, properties: [:])
+  }
+
+  private static func writeTemporaryImage(_ data: Data) -> String? {
+    let stamp = ISO8601DateFormatter().string(from: Date())
+      .replacingOccurrences(of: ":", with: "-")
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("粘贴的图片-\(stamp).png")
+    do {
+      try data.write(to: url, options: .atomic)
+      return url.path
+    } catch {
+      NSLog("[SendHere.Input] Could not write pasted image: %@", error.localizedDescription)
+      return nil
+    }
+  }
 }
 
 final class SendHereScrollView: NSScrollView {

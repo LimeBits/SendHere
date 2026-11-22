@@ -21,6 +21,7 @@ import 'native_text_field.dart';
 import 'message_history.dart';
 import 'outbox.dart';
 import 'transfer_event.dart';
+import 'update_checker.dart';
 
 const _mobileFileChannel = MethodChannel('sendhere/mobile_file');
 const _notificationChannel = MethodChannel('sendhere/notifications');
@@ -380,6 +381,7 @@ class _SendHereHomeState extends State<SendHereHome>
   static const _recentDevicesKey = 'sendhere-recent-devices';
   static const _unreadCountsKey = 'sendhere-unread-counts';
   static const _qrUseTailscaleKey = 'sendhere-qr-use-tailscale';
+  static const _skippedUpdateBuildKey = 'sendhere-skipped-update-build';
   static const _conversationDropChannel =
       MethodChannel('sendhere/conversation_drop');
 
@@ -399,7 +401,48 @@ class _SendHereHomeState extends State<SendHereHome>
       await _updateNotificationBadge();
       await _refreshNotificationPermission(request: true);
       await _startServer();
+      unawaited(_checkForUpdate());
     });
+  }
+
+  /// Runs on each launch. Unsigned builds are not auto-installed; the user
+  /// downloads the new DMG from the release page.
+  Future<void> _checkForUpdate() async {
+    if (!Platform.isMacOS) return;
+    final update = await UpdateChecker.checkLatest();
+    if (update == null || !mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getInt(_skippedUpdateBuildKey) == update.build) return;
+    if (!mounted) return;
+    final action = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('发现新版本 ${update.tag}'),
+        content: Text(
+          '当前是 build $sendHereBuildNumber，最新是 build ${update.build}。\n'
+          '下载 DMG 后，把 SendHere 拖到“应用程序”里覆盖旧版本即可。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 'skip'),
+            child: const Text('跳过此版本'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 'later'),
+            child: const Text('稍后'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, 'open'),
+            child: const Text('下载更新'),
+          ),
+        ],
+      ),
+    );
+    if (action == 'skip') {
+      await prefs.setInt(_skippedUpdateBuildKey, update.build);
+    } else if (action == 'open') {
+      await Process.run('open', [update.url]);
+    }
   }
 
   @override

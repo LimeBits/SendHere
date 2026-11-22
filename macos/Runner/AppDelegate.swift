@@ -80,11 +80,13 @@ final class StatusBarController: NSObject {
     let menu = NSMenu()
     let open = NSMenuItem(
       title: "打开 SendHere", action: #selector(showMainWindow), keyEquivalent: "")
+    let update = NSMenuItem(
+      title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
     let quit = NSMenuItem(title: "退出 SendHere", action: #selector(quitApp), keyEquivalent: "q")
-    for menuItem in [open, quit] {
+    for menuItem in [open, update, quit] {
       menuItem.target = self
       menu.addItem(menuItem)
-      if menuItem === open { menu.addItem(NSMenuItem.separator()) }
+      if menuItem === open || menuItem === update { menu.addItem(NSMenuItem.separator()) }
     }
 
     // Attaching the menu only for this click keeps left-click as a direct
@@ -106,6 +108,11 @@ final class StatusBarController: NSObject {
 
   @objc private func quitApp() {
     NSApp.terminate(nil)
+  }
+
+  @objc private func checkForUpdates() {
+    showMainWindow()
+    UpdateMenuBridge.shared.requestCheck()
   }
 
   private static func makeIcon() -> NSImage? {
@@ -155,6 +162,22 @@ class AppDelegate: FlutterAppDelegate {
   override func applicationDidFinishLaunching(_ notification: Notification) {
     super.applicationDidFinishLaunching(notification)
     StatusBarController.shared.install()
+    addCheckForUpdatesMenuItem()
+  }
+
+  /// Adds "检查更新…" under the app menu, just after "关于 SendHere".
+  private func addCheckForUpdatesMenuItem() {
+    guard let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
+    let item = NSMenuItem(
+      title: "检查更新…", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
+    item.target = self
+    let insertAt = min(1, appMenu.items.count)
+    appMenu.insertItem(item, at: insertAt)
+  }
+
+  @objc private func checkForUpdatesFromMenu() {
+    NSApp.activate(ignoringOtherApps: true)
+    UpdateMenuBridge.shared.requestCheck()
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

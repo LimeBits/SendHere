@@ -301,6 +301,17 @@ private final class ConversationContainerController: NSViewController {
   }
 }
 
+/// Shared bridge so menu items (app menu, status bar) can ask Dart to run the
+/// update check. It is nil until the Flutter window has been created.
+final class UpdateMenuBridge {
+  static let shared = UpdateMenuBridge()
+  var channel: FlutterMethodChannel?
+
+  func requestCheck() {
+    channel?.invokeMethod("checkForUpdates", arguments: nil)
+  }
+}
+
 class MainFlutterWindow: NSWindow {
   private var conversationDropChannel: FlutterMethodChannel?
   private var notificationChannel: FlutterMethodChannel?
@@ -315,6 +326,9 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+
+    UpdateMenuBridge.shared.channel = FlutterMethodChannel(
+      name: "sendhere/update", binaryMessenger: flutterViewController.engine.binaryMessenger)
 
     conversationDropChannel = FlutterMethodChannel(
       name: "sendhere/conversation_drop", binaryMessenger: flutterViewController.engine.binaryMessenger)

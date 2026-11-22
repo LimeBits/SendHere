@@ -2017,7 +2017,7 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                           child: FilledButton.icon(
                             onPressed: widget.connectPhone,
                             icon: const Icon(Icons.phone_iphone_outlined),
-                            label: const Text('连接手机'),
+                            label: const Text('手机'),
                           ),
                         ),
                         if (widget.addRemoteDevice != null) ...[
@@ -2026,7 +2026,7 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                             child: OutlinedButton.icon(
                               onPressed: widget.addRemoteDevice,
                               icon: const Icon(Icons.add_link, size: 18),
-                              label: const Text('添加远程电脑'),
+                              label: const Text('远程电脑'),
                             ),
                           ),
                         ],

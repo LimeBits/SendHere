@@ -587,8 +587,14 @@ class _SendHereHomeState extends State<SendHereHome>
     }
   }
 
+  /// Returning to the foreground must not rebuild a working server. Rebuilding
+  /// discards the QR token and every browser session, so other phones that
+  /// were connected through the web page lose access. Restart only when the
+  /// server is actually gone.
   Future<void> _restartAfterForeground() async {
-    if (_restartingForForeground || _server == null) return;
+    if (_restartingForForeground) return;
+    final server = _server;
+    if (server != null && server.isRunning) return;
     _restartingForForeground = true;
     try {
       await _startServer();

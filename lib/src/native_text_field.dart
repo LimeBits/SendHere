@@ -210,13 +210,16 @@ class NativeTextFieldState extends State<NativeTextField> {
         minLines: null,
         textAlignVertical: TextAlignVertical.top,
         keyboardType: TextInputType.multiline,
-        textInputAction: TextInputAction.newline,
+        // The return key sends, as in WeChat. iOS and Android still show a
+        // separate 换行 key for multiline fields, which inserts the line break.
+        textInputAction: TextInputAction.send,
         decoration: const InputDecoration(
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           hintText: '输入消息',
         ),
         onChanged: widget.onChanged,
+        onSubmitted: (value) => widget.onSubmitted(value),
       ),
     );
   }

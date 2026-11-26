@@ -1064,7 +1064,13 @@ class _SendHereHomeState extends State<SendHereHome>
         }
 
         return AlertDialog(
-          title: const Text('通过 Tailscale 添加电脑'),
+          title: const Row(children: [
+            Icon(Icons.add_link, size: 16),
+            SizedBox(width: 6),
+            Text('添加远程电脑',
+                style:
+                    TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+          ]),
           content: SizedBox(
             width: 360,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1672,11 +1678,12 @@ class _SendHereHomeState extends State<SendHereHome>
             : null,
       ),
       body: Padding(
-        // Desktop: the window has no title bar, so the top inset only needs to
-        // clear the floating traffic lights.
+        // Desktop has no title bar, so panels run to the top edge. Only the
+        // sidebar needs to clear the floating traffic lights, and it adds that
+        // inset itself; the conversation header sits flush.
         padding: mobile
             ? EdgeInsets.zero
-            : const EdgeInsets.fromLTRB(12, 30, 12, 12),
+            : const EdgeInsets.fromLTRB(12, 0, 12, 12),
         child: _error != null
             ? _ErrorView(error: _error!, retry: _startServer)
             : _server == null
@@ -1801,68 +1808,60 @@ enum _AttachmentSource { photos, files }
 /// resolves the host, probes it, and dials the WebSocket connection.
 enum _RemoteAddStage { resolving, found, connecting, connected }
 
-/// Shows the current _RemoteAddStage as a row of three labelled steps
-/// (已找到 → 正在建立连接 → 已连接), the current one highlighted. "resolving"
-/// (DNS lookup) has no step of its own; it reads as "已找到" not yet reached.
+/// Shows the current _RemoteAddStage as one line of text plus a thin bar. The
+/// earlier version stacked three circled steps, which was tall, widely spaced
+/// and visually noisy inside a narrow panel.
 class _RemoteAddProgress extends StatelessWidget {
   const _RemoteAddProgress({required this.stage});
 
   final _RemoteAddStage stage;
 
-  static const _steps = ['已找到', '正在建立连接', '已连接'];
-
-  int get _activeIndex => switch (stage) {
-        _RemoteAddStage.resolving => -1,
-        _RemoteAddStage.found => 0,
-        _RemoteAddStage.connecting => 1,
-        _RemoteAddStage.connected => 2,
+  /// Label, step number and bar fraction per stage. "resolving" and "found"
+  /// are both step 1: a DNS lookup that has returned is still just the address
+  /// being resolved, from the user's point of view.
+  (String, int, double) get _state => switch (stage) {
+        _RemoteAddStage.resolving => ('正在解析地址', 1, 0.33),
+        _RemoteAddStage.found => ('已找到设备', 1, 0.5),
+        _RemoteAddStage.connecting => ('正在建立连接', 2, 0.75),
+        _RemoteAddStage.connected => ('已连接', 3, 1),
       };
 
   @override
   Widget build(BuildContext context) {
-    final activeIndex = _activeIndex;
-    final accent = Theme.of(context).colorScheme.primary;
-    return Row(
-      children: List.generate(_steps.length * 2 - 1, (index) {
-        if (index.isOdd) {
-          final completed = index ~/ 2 < activeIndex;
-          return Expanded(
-            child: Container(
-              height: 2,
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              color: completed
-                  ? accent
-                  : Theme.of(context).colorScheme.outlineVariant,
-            ),
-          );
-        }
-        final stepIndex = index ~/ 2;
-        final reached = stepIndex <= activeIndex;
-        final current = stepIndex == activeIndex;
-        return Column(mainAxisSize: MainAxisSize.min, children: [
-          SizedBox(
-            width: 16,
-            height: 16,
-            child: current
-                ? CircularProgressIndicator(strokeWidth: 2, color: accent)
-                : Icon(
-                    reached ? Icons.check_circle : Icons.circle_outlined,
-                    size: 16,
-                    color: reached
-                        ? accent
-                        : Theme.of(context).colorScheme.outlineVariant,
-                  ),
-          ),
-          const SizedBox(height: 4),
-          Text(_steps[stepIndex],
-              style: TextStyle(
-                  fontSize: 11,
-                  color: reached
-                      ? accent
-                      : Theme.of(context).colorScheme.onSurfaceVariant)),
-        ]);
-      }),
-    );
+    final (label, step, fraction) = _state;
+    final done = stage == _RemoteAddStage.connected;
+    final accent = done ? SendHereColors.online : SendHereColors.brand;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        SizedBox(
+          width: 12,
+          height: 12,
+          child: done
+              ? const Icon(Icons.check, size: 12, color: SendHereColors.online)
+              : CircularProgressIndicator(strokeWidth: 1.6, color: accent),
+        ),
+        const SizedBox(width: 6),
+        Text(label,
+            style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: SendHereColors.ink)),
+        if (!done)
+          Text(' · $step / 3',
+              style:
+                  const TextStyle(fontSize: 11, color: SendHereColors.sub)),
+      ]),
+      const SizedBox(height: 5),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(99),
+        child: LinearProgressIndicator(
+          value: fraction,
+          minHeight: 3,
+          backgroundColor: SendHereColors.chip,
+          valueColor: AlwaysStoppedAnimation(accent),
+        ),
+      ),
+    ]);
   }
 }
 
@@ -2011,18 +2010,32 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
         // raised card leads the user to expect.
         if (widget.phoneQrExpanded) widget.hidePhoneQr();
       },
-      child: Card(
-        // The sidebar shares the page background so the list no longer looks
-        // like a white card nested inside another white card. Mobile keeps the
-        // plain card, where the list is the whole screen.
-        color: mobile ? null : SendHereColors.paper,
-        clipBehavior: Clip.antiAlias,
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(14, 12, 14, 8),
-            child: Text('设备列表',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+      child: Stack(children: [
+        Card(
+          // The sidebar shares the page background so the list no longer looks
+          // like a white card nested inside another white card. Mobile keeps the
+          // plain card, where the list is the whole screen.
+          color: mobile ? null : SendHereColors.paper,
+          clipBehavior: Clip.antiAlias,
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(
+            // Desktop keeps 36 at the top so the macOS traffic lights, which
+            // float over the content, never cover the title or the ＋.
+            padding: EdgeInsets.fromLTRB(14, mobile ? 14 : 36, 10, 8),
+            child: Row(children: [
+              const Expanded(
+                child: Text('设备列表',
+                    style:
+                        TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+              if (!mobile)
+                _AddDeviceButton(
+                  active: widget.phoneQrExpanded,
+                  connectPhone: widget.connectPhone,
+                  addRemoteDevice: widget.addRemoteDevice,
+                ),
+            ]),
           ),
           if (mobile &&
               widget.notificationPermission != null &&
@@ -2075,52 +2088,126 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                           )
                         : const SizedBox.shrink(),
                   ),
-          ),
-          if (widget.showPhoneConnection) ...[
-            const Divider(height: 1),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              child: widget.phoneQrExpanded
-                  // Absorbs taps so clicking inside the panel does not reach
-                  // the sidebar's dismiss handler.
-                  ? GestureDetector(
-                      onTap: () {},
-                      child: _PhoneConnectCard(
-                          url: widget.url,
-                          networkToggle: widget.qrNetworkToggle,
-                          viaTailscale: widget.qrViaTailscale,
-                          onCollapse: widget.hidePhoneQr),
-                    )
-                  : Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                      // Both are low-frequency entry points, so neither takes
-                      // the screen's single filled highlight; that belongs to
-                      // the send button.
-                      child: Row(children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: widget.connectPhone,
-                            icon:
-                                const Icon(Icons.phone_iphone_outlined, size: 18),
-                            label: const Text('手机'),
-                          ),
-                        ),
-                        if (widget.addRemoteDevice != null) ...[
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: widget.addRemoteDevice,
-                              icon: const Icon(Icons.add_link, size: 18),
-                              label: const Text('远程电脑'),
-                            ),
-                          ),
-                        ],
-                      ]),
-                    ),
             ),
-          ],
-        ]),
+          ]),
+        ),
+        // The QR panel floats over the list, anchored under the ＋, with a soft
+        // shadow so it never reads as another row of the device list.
+        if (widget.showPhoneConnection && widget.phoneQrExpanded)
+          Positioned(
+            left: 10,
+            right: 10,
+            top: 66,
+            child: GestureDetector(
+              // Absorbs taps so clicking inside the panel does not reach the
+              // sidebar's dismiss handler.
+              onTap: () {},
+              child: _PhoneConnectCard(
+                  url: widget.url,
+                  networkToggle: widget.qrNetworkToggle,
+                  viaTailscale: widget.qrViaTailscale,
+                  onCollapse: widget.hidePhoneQr),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+/// The ＋ in the sidebar header. One entry point for both ways of adding a
+/// device, so the footer buttons are gone and the list runs to the bottom.
+class _AddDeviceButton extends StatefulWidget {
+  const _AddDeviceButton({
+    required this.active,
+    required this.connectPhone,
+    required this.addRemoteDevice,
+  });
+
+  /// Whether a panel opened from this button is currently showing.
+  final bool active;
+  final VoidCallback connectPhone;
+  final VoidCallback? addRemoteDevice;
+
+  @override
+  State<_AddDeviceButton> createState() => _AddDeviceButtonState();
+}
+
+class _AddDeviceButtonState extends State<_AddDeviceButton> {
+  bool _menuOpen = false;
+
+  Future<void> _openMenu() async {
+    final button = context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (button == null || overlay == null) return;
+    final topLeft = button.localToGlobal(Offset.zero, ancestor: overlay);
+    final size = button.size;
+    setState(() => _menuOpen = true);
+    final choice = await showMenu<String>(
+      context: context,
+      // Anchored to the button's left edge, opening downwards.
+      position: RelativeRect.fromLTRB(
+        topLeft.dx,
+        topLeft.dy + size.height + 4,
+        overlay.size.width - topLeft.dx - size.width,
+        0,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+      menuPadding: const EdgeInsets.all(5),
+      items: [
+        const _RoundedMenuItem(
+          value: 'phone',
+          child: Row(children: [
+            Icon(Icons.phone_iphone_outlined, size: 17),
+            SizedBox(width: 8),
+            Text('连接手机'),
+          ]),
+        ),
+        if (widget.addRemoteDevice != null)
+          const _RoundedMenuItem(
+            value: 'remote',
+            child: Row(children: [
+              Icon(Icons.add_link, size: 17),
+              SizedBox(width: 8),
+              Text('添加远程电脑'),
+            ]),
+          ),
+      ],
+    );
+    if (mounted) setState(() => _menuOpen = false);
+    if (choice == 'phone') {
+      widget.connectPhone();
+    } else if (choice == 'remote') {
+      widget.addRemoteDevice?.call();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final highlighted = _menuOpen || widget.active;
+    return Tooltip(
+      message: '添加设备',
+      child: Material(
+        color: highlighted ? SendHereColors.brandSoft : SendHereColors.card,
+        shape: CircleBorder(
+          side: BorderSide(
+            color: highlighted ? SendHereColors.brandSoft : SendHereColors.line,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: _openMenu,
+          child: SizedBox(
+            width: 26,
+            height: 26,
+            child: Icon(Icons.add,
+                size: 17,
+                color: highlighted
+                    ? SendHereColors.brandText
+                    : SendHereColors.ink),
+          ),
+        ),
       ),
     );
   }
@@ -2588,8 +2675,7 @@ class _PhoneConnectCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         decoration: BoxDecoration(
           color: SendHereColors.card,
           borderRadius: BorderRadius.circular(SendHereRadius.card),
@@ -2606,16 +2692,19 @@ class _PhoneConnectCard extends StatelessWidget {
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Row(children: [
-            const Icon(Icons.phone_iphone_outlined, size: 18),
-            const SizedBox(width: 7),
+            const Icon(Icons.phone_iphone_outlined, size: 15),
+            const SizedBox(width: 6),
             const Expanded(
               child: Text('连接手机',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  style:
+                      TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
             ),
             IconButton(
-              tooltip: '收起',
-              icon: const Icon(Icons.keyboard_arrow_down),
+              tooltip: '关闭',
+              icon: const Icon(Icons.close, size: 15),
               visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
               onPressed: onCollapse,
             ),
           ]),

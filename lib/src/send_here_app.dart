@@ -370,6 +370,10 @@ class _SendHereHomeState extends State<SendHereHome>
   String? _error;
   String? _selectedPeerId;
   bool _phoneQrExpanded = false;
+
+  /// Whether the "添加远程电脑" panel is showing. It occupies the same spot in
+  /// the sidebar as the QR panel, so only one can be open at a time.
+  bool _remoteAddExpanded = false;
   bool _showMobileConversation = false;
   bool _restartingForForeground = false;
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
@@ -1023,100 +1027,16 @@ class _SendHereHomeState extends State<SendHereHome>
 
   /// Adds a computer that has never been on the same LAN, by its Tailscale IP
   /// or MagicDNS name (e.g. macmini.tailxxxx.ts.net).
-  Future<void> _showAddRemoteDevice() async {
-    final controller = TextEditingController();
-    String? error;
-    var busy = false;
-    _RemoteAddStage? stage;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => StatefulBuilder(builder: (context, setDialogState) {
-        Future<void> submit() async {
-          final input = controller.text.trim();
-          if (input.isEmpty) return;
-          final parsed = _parseHostPort(input);
-          setDialogState(() {
-            busy = true;
-            error = null;
-            stage = _RemoteAddStage.resolving;
-          });
-          final added = await _addRemoteDevice(
-            parsed.$1,
-            parsed.$2,
-            onStageChanged: (newStage) {
-              if (context.mounted) setDialogState(() => stage = newStage);
-            },
-          );
-          if (!context.mounted) return;
-          if (added == null) {
-            // Hold the "已连接" state briefly so the user actually sees the
-            // connection succeed, instead of the dialog vanishing the instant
-            // connectToPeer returns.
-            await Future<void>.delayed(const Duration(milliseconds: 500));
-            if (context.mounted) Navigator.of(context).pop();
-          } else {
-            setDialogState(() {
-              busy = false;
-              error = added;
-              stage = null;
-            });
-          }
-        }
-
-        return AlertDialog(
-          title: const Row(children: [
-            Icon(Icons.add_link, size: 16),
-            SizedBox(width: 6),
-            Text('添加远程电脑',
-                style:
-                    TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
-          ]),
-          content: SizedBox(
-            width: 360,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text(
-                _tailscaleAddress == null
-                    ? '本机未检测到 Tailscale 地址，请先打开 Tailscale。'
-                    : '在对方电脑上打开 SendHere，然后输入它的 Tailscale 地址或主机名。本机：$_tailscaleAddress',
-                style: const TextStyle(fontSize: 13, color: SendHereColors.sub),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                enabled: !busy,
-                decoration: InputDecoration(
-                  hintText: '100.x.x.x 或 macmini.tailxxxx.ts.net',
-                  errorText: error,
-                  border: const OutlineInputBorder(),
-                ),
-                onSubmitted: (_) => submit(),
-              ),
-              if (busy && stage != null) ...[
-                const SizedBox(height: 12),
-                _RemoteAddProgress(stage: stage!),
-              ],
-            ]),
-          ),
-          actions: [
-            TextButton(
-                onPressed: busy ? null : () => Navigator.of(context).pop(),
-                child: const Text('取消')),
-            FilledButton(
-              onPressed: busy ? null : submit,
-              child: busy
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('连接'),
-            ),
-          ],
-        );
-      }),
-    );
-    controller.dispose();
+  /// Opens the 添加远程电脑 panel in the sidebar, replacing the QR panel if it
+  /// is showing. The panel itself owns the input and connection state.
+  void _showAddRemoteDevice() {
+    setState(() {
+      _phoneQrExpanded = false;
+      _remoteAddExpanded = true;
+    });
   }
+
+  void _hideRemoteAddPanel() => setState(() => _remoteAddExpanded = false);
 
   static (String, int) _parseHostPort(String input) {
     final cleaned =
@@ -1529,7 +1449,10 @@ class _SendHereHomeState extends State<SendHereHome>
     // Never present a QR code that may have expired while the app was open.
     // This deliberately keeps existing phone sessions alive.
     server.refreshToken(disconnectExisting: false);
-    setState(() => _phoneQrExpanded = true);
+    setState(() {
+      _remoteAddExpanded = false;
+      _phoneQrExpanded = true;
+    });
   }
 
   Future<void> _showMobileConnectQr() async {
@@ -1711,6 +1634,16 @@ class _SendHereHomeState extends State<SendHereHome>
                           connectPhone: _showPhoneConnectPanel,
                           showPhoneConnection: !mobile,
                           phoneQrExpanded: _phoneQrExpanded,
+                          remoteAddExpanded: _remoteAddExpanded,
+                          hideRemoteAdd: _hideRemoteAddPanel,
+                          localTailscaleAddress: _tailscaleAddress,
+                          addRemoteDeviceAt: mobile
+                              ? null
+                              : (input, {onStageChanged}) {
+                                  final parsed = _parseHostPort(input);
+                                  return _addRemoteDevice(parsed.$1, parsed.$2,
+                                      onStageChanged: onStageChanged);
+                                },
                           hidePhoneQr: _hidePhoneConnectPanel,
                           deleteConversation: _deleteConversation,
                           notificationPermission: _notificationPermission,
@@ -1792,8 +1725,8 @@ class _SendHereHomeState extends State<SendHereHome>
                           );
                         }
                         return Row(children: [
-                          SizedBox(width: 300, child: sidebar),
-                          const SizedBox(width: 16),
+                          SizedBox(width: 252, child: sidebar),
+                          const SizedBox(width: 14),
                           Expanded(child: conversation),
                         ]);
                       }),
@@ -1955,6 +1888,10 @@ class _DeviceSidebar extends StatefulWidget {
     required this.connectPhone,
     required this.showPhoneConnection,
     required this.phoneQrExpanded,
+    required this.remoteAddExpanded,
+    required this.hideRemoteAdd,
+    required this.localTailscaleAddress,
+    required this.addRemoteDeviceAt,
     required this.hidePhoneQr,
     required this.deleteConversation,
     required this.notificationPermission,
@@ -1974,6 +1911,15 @@ class _DeviceSidebar extends StatefulWidget {
   final VoidCallback connectPhone;
   final bool showPhoneConnection;
   final bool phoneQrExpanded;
+  final bool remoteAddExpanded;
+  final VoidCallback hideRemoteAdd;
+  final String? localTailscaleAddress;
+
+  /// Null on mobile, where remote peers cannot be added by hand.
+  final Future<String?> Function(
+    String input, {
+    ValueChanged<_RemoteAddStage>? onStageChanged,
+  })? addRemoteDeviceAt;
   final VoidCallback hidePhoneQr;
   final ValueChanged<String> deleteConversation;
   final String? notificationPermission;
@@ -2009,6 +1955,7 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
         // Tapping anywhere outside the panel dismisses it, which is what the
         // raised card leads the user to expect.
         if (widget.phoneQrExpanded) widget.hidePhoneQr();
+        if (widget.remoteAddExpanded) widget.hideRemoteAdd();
       },
       child: Stack(children: [
         Card(
@@ -2031,7 +1978,8 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
               ),
               if (!mobile)
                 _AddDeviceButton(
-                  active: widget.phoneQrExpanded,
+                  active:
+                      widget.phoneQrExpanded || widget.remoteAddExpanded,
                   connectPhone: widget.connectPhone,
                   addRemoteDevice: widget.addRemoteDevice,
                 ),
@@ -2057,6 +2005,10 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                     ),
                   )
                 : ListView.separated(
+                    // Desktop insets the rounded rows from the sidebar edges.
+                    padding: mobile
+                        ? EdgeInsets.zero
+                        : const EdgeInsets.symmetric(horizontal: 8),
                     itemCount: peers.length,
                     itemBuilder: (context, index) {
                       final device = peers[index];
@@ -2086,32 +2038,233 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                                 .dividerColor
                                 .withValues(alpha: 0.55),
                           )
-                        : const SizedBox.shrink(),
+                        : const SizedBox(height: 1),
                   ),
             ),
           ]),
         ),
-        // The QR panel floats over the list, anchored under the ＋, with a soft
-        // shadow so it never reads as another row of the device list.
-        if (widget.showPhoneConnection && widget.phoneQrExpanded)
+        // Both panels float over the list in the same slot, anchored under the
+        // ＋, with a soft shadow so neither reads as another device row.
+        if (!mobile && (widget.phoneQrExpanded || widget.remoteAddExpanded))
           Positioned(
-            left: 10,
-            right: 10,
+            left: 12,
+            right: 12,
             top: 66,
             child: GestureDetector(
               // Absorbs taps so clicking inside the panel does not reach the
               // sidebar's dismiss handler.
               onTap: () {},
-              child: _PhoneConnectCard(
-                  url: widget.url,
-                  networkToggle: widget.qrNetworkToggle,
-                  viaTailscale: widget.qrViaTailscale,
-                  onCollapse: widget.hidePhoneQr),
+              child: widget.phoneQrExpanded
+                  ? _PhoneConnectCard(
+                      url: widget.url,
+                      networkToggle: widget.qrNetworkToggle,
+                      viaTailscale: widget.qrViaTailscale,
+                      onCollapse: widget.hidePhoneQr)
+                  : _RemoteAddCard(
+                      localTailscaleAddress: widget.localTailscaleAddress,
+                      addRemoteDevice: widget.addRemoteDeviceAt!,
+                      onClose: widget.hideRemoteAdd,
+                    ),
             ),
           ),
       ]),
     );
   }
+}
+
+/// The 添加远程电脑 panel. It sits in the same sidebar slot as the QR panel so
+/// both entry points from the ＋ produce a result in one place, instead of one
+/// panel docking in the sidebar and the other opening a centred dialog.
+class _RemoteAddCard extends StatefulWidget {
+  const _RemoteAddCard({
+    required this.localTailscaleAddress,
+    required this.addRemoteDevice,
+    required this.onClose,
+  });
+
+  final String? localTailscaleAddress;
+
+  /// Takes the raw text the user typed. Returns null on success, or a message
+  /// to show inline on failure.
+  final Future<String?> Function(
+    String input, {
+    ValueChanged<_RemoteAddStage>? onStageChanged,
+  }) addRemoteDevice;
+  final VoidCallback onClose;
+
+  @override
+  State<_RemoteAddCard> createState() => _RemoteAddCardState();
+}
+
+class _RemoteAddCardState extends State<_RemoteAddCard> {
+  final _controller = TextEditingController();
+  String? _error;
+  bool _busy = false;
+  _RemoteAddStage? _stage;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final input = _controller.text.trim();
+    if (input.isEmpty || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _stage = _RemoteAddStage.resolving;
+    });
+    final failure = await widget.addRemoteDevice(
+      input,
+      onStageChanged: (stage) {
+        if (mounted) setState(() => _stage = stage);
+      },
+    );
+    if (!mounted) return;
+    if (failure == null) {
+      // Hold "已连接" briefly so the success is actually visible rather than
+      // the panel vanishing the moment connectToPeer returns.
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (mounted) widget.onClose();
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = failure;
+      _stage = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final address = widget.localTailscaleAddress;
+    return _SidebarPanel(
+      icon: Icons.add_link,
+      title: '添加远程电脑',
+      onClose: widget.onClose,
+      children: [
+        Text(
+          address == null
+              ? '本机未检测到 Tailscale 地址，请先打开 Tailscale。'
+              : '在对方电脑打开 SendHere，输入它的 Tailscale 地址。\n本机 $address',
+          style: const TextStyle(fontSize: 11, color: SendHereColors.sub),
+        ),
+        const SizedBox(height: 9),
+        TextField(
+          controller: _controller,
+          autofocus: true,
+          enabled: !_busy,
+          style: const TextStyle(fontSize: 11.5, fontFamily: 'Menlo'),
+          decoration: InputDecoration(
+            hintText: '100.x.x.x 或 host.ts.net',
+            hintStyle:
+                const TextStyle(fontSize: 11.5, color: Color(0xFF9A9AA0)),
+            errorText: _error,
+            errorStyle: const TextStyle(fontSize: 10.5),
+            isDense: true,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: SendHereColors.line),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: SendHereColors.line),
+            ),
+          ),
+          onSubmitted: (_) => _submit(),
+        ),
+        if (_stage != null) ...[
+          const SizedBox(height: 9),
+          _RemoteAddProgress(stage: _stage!),
+        ],
+        const SizedBox(height: 10),
+        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          TextButton(
+            onPressed: _busy ? null : widget.onClose,
+            style: TextButton.styleFrom(
+              foregroundColor: SendHereColors.sub,
+              visualDensity: VisualDensity.compact,
+            ),
+            child: const Text('取消', style: TextStyle(fontSize: 11.5)),
+          ),
+          const SizedBox(width: 4),
+          FilledButton(
+            onPressed: _busy ? null : _submit,
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+              textStyle: const TextStyle(
+                  fontSize: 11.5, fontWeight: FontWeight.w600),
+            ),
+            child: const Text('添加'),
+          ),
+        ]),
+      ],
+    );
+  }
+}
+
+/// Shared chrome for the two sidebar panels: rounded white card, hairline
+/// border, soft shadow, and a header with an icon, a 12.5 pt title and ✕.
+class _SidebarPanel extends StatelessWidget {
+  const _SidebarPanel({
+    required this.icon,
+    required this.title,
+    required this.onClose,
+    required this.children,
+  });
+
+  final IconData icon;
+  final String title;
+  final VoidCallback onClose;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          color: SendHereColors.card,
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(color: SendHereColors.line, width: 0.5),
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x29000000), blurRadius: 26, offset: Offset(0, 8)),
+            BoxShadow(
+                color: Color(0x0F000000), blurRadius: 3, offset: Offset(0, 1)),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(children: [
+              Icon(icon, size: 15),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(title,
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w600)),
+              ),
+              IconButton(
+                tooltip: '关闭',
+                icon: const Icon(Icons.close, size: 15),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 24, minHeight: 24),
+                onPressed: onClose,
+              ),
+            ]),
+            const SizedBox(height: 7),
+            ...children,
+          ],
+        ),
+      );
 }
 
 /// The ＋ in the sidebar header. One entry point for both ways of adding a
@@ -2379,22 +2532,35 @@ class _DeviceTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final phone = device.name.contains('手机') || device.name.contains('iPhone');
     final statusLabel = _statusLabel(context);
+    final desktop = !Platform.isIOS && !Platform.isAndroid;
     final tile = Material(
       color: SendHereColors.paper,
       child: ListTile(
         selected: selected,
         selectedTileColor: SendHereColors.brandSoft,
+        // Desktop rows are rounded blocks inset from the sidebar edges, so a
+        // selected device reads as a chip rather than a full-width colour band.
+        shape: desktop
+            ? const RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(10)))
+            : null,
+        contentPadding: desktop
+            ? const EdgeInsets.symmetric(horizontal: 8)
+            : null,
+        horizontalTitleGap: desktop ? 9 : null,
         leading: _DeviceAvatar(
           phone: phone,
           online: device.online,
           unreadCount: unreadCount,
         ),
-        minVerticalPadding: 7,
+        minVerticalPadding: desktop ? 6 : 7,
         title: Text(device.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-        subtitle: Text(statusLabel, style: const TextStyle(fontSize: 12)),
+            style: TextStyle(
+                fontSize: desktop ? 12.5 : 14, fontWeight: FontWeight.w500)),
+        subtitle: Text(statusLabel,
+            style: TextStyle(fontSize: desktop ? 10.5 : 12)),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2674,50 +2840,22 @@ class _PhoneConnectCard extends StatelessWidget {
   final VoidCallback onCollapse;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-        decoration: BoxDecoration(
-          color: SendHereColors.card,
-          borderRadius: BorderRadius.circular(SendHereRadius.card),
-          border: Border.all(color: SendHereColors.line),
-          // Lifts the panel off the sidebar so it no longer reads as part of
-          // the device list.
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x1F000000),
-              blurRadius: 18,
-              offset: Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(children: [
-            const Icon(Icons.phone_iphone_outlined, size: 15),
-            const SizedBox(width: 6),
-            const Expanded(
-              child: Text('连接手机',
-                  style:
-                      TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-            ),
-            IconButton(
-              tooltip: '关闭',
-              icon: const Icon(Icons.close, size: 15),
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-              onPressed: onCollapse,
-            ),
-          ]),
-          const SizedBox(height: 8),
+  Widget build(BuildContext context) => _SidebarPanel(
+        icon: Icons.phone_iphone_outlined,
+        title: '连接手机',
+        onClose: onCollapse,
+        children: [
           // The QR code leads, so it is the widest element in the panel.
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: SendHereColors.line),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: SendHereColors.line),
+              ),
+              child: QrImageView(data: url, size: 148),
             ),
-            child: QrImageView(data: url, size: 148),
           ),
           if (networkToggle != null) networkToggle!,
           const SizedBox(height: 4),
@@ -2727,7 +2865,7 @@ class _PhoneConnectCard extends StatelessWidget {
                   : '用系统相机或微信扫一扫，无需安装 App。',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 11, color: SendHereColors.sub)),
-          const SizedBox(height: 6),
+          const SizedBox(height: 2),
           TextButton.icon(
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: url));
@@ -2737,11 +2875,11 @@ class _PhoneConnectCard extends StatelessWidget {
                 );
               }
             },
-            icon: const Icon(Icons.copy_outlined, size: 16),
+            icon: const Icon(Icons.copy_outlined, size: 15),
             label: const Text('复制连接链接',
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ),
-        ]),
+        ],
       );
 }
 
@@ -2886,7 +3024,7 @@ class _ConversationHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final viaTailscale = online && transport == PeerTransport.tailscale;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 14, 10),
+      padding: const EdgeInsets.fromLTRB(16, 14, 14, 10),
       child: Row(children: [
         Expanded(
           child: Text(name,

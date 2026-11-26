@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw
 ASSET_DIR = Path(__file__).resolve().parents[1] / "macos/Runner/Assets.xcassets/AppIcon.appiconset"
 SIZES = (16, 32, 64, 128, 256, 512, 1024)
 SCALE = 4
-BLUE = "#4658D6"
+BLUE = "#2563EB"
 
 
 def draw_rounded_line(draw, points, width, fill):

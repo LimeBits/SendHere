@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 IOS_DIR = ROOT / "ios/Runner/Assets.xcassets/AppIcon.appiconset"
 ANDROID_RES = ROOT / "android/app/src/main/res"
 SCALE = 4
-BLUE = "#4658D6"
+BLUE = "#2563EB"
 WHITE = "#FFFFFF"
 
 IOS_ICONS = {

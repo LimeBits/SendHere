@@ -2001,7 +2001,12 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
     final mobile = Platform.isIOS || Platform.isAndroid;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: _collapseActions,
+      onTap: () {
+        _collapseActions();
+        // Tapping anywhere outside the panel dismisses it, which is what the
+        // raised card leads the user to expect.
+        if (widget.phoneQrExpanded) widget.hidePhoneQr();
+      },
       child: Card(
         clipBehavior: Clip.antiAlias,
         child:
@@ -2069,11 +2074,16 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOut,
               child: widget.phoneQrExpanded
-                  ? _PhoneConnectCard(
-                      url: widget.url,
-                      networkToggle: widget.qrNetworkToggle,
-                      viaTailscale: widget.qrViaTailscale,
-                      onCollapse: widget.hidePhoneQr)
+                  // Absorbs taps so clicking inside the panel does not reach
+                  // the sidebar's dismiss handler.
+                  ? GestureDetector(
+                      onTap: () {},
+                      child: _PhoneConnectCard(
+                          url: widget.url,
+                          networkToggle: widget.qrNetworkToggle,
+                          viaTailscale: widget.qrViaTailscale,
+                          onCollapse: widget.hidePhoneQr),
+                    )
                   : Padding(
                       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                       // Both are low-frequency entry points, so neither takes
@@ -2569,8 +2579,23 @@ class _PhoneConnectCard extends StatelessWidget {
   final VoidCallback onCollapse;
 
   @override
-  Widget build(BuildContext context) => Padding(
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.fromLTRB(10, 8, 10, 10),
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        decoration: BoxDecoration(
+          color: SendHereColors.card,
+          borderRadius: BorderRadius.circular(SendHereRadius.card),
+          border: Border.all(color: SendHereColors.line),
+          // Lifts the panel off the sidebar so it no longer reads as part of
+          // the device list.
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x1F000000),
+              blurRadius: 18,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Row(children: [
             const Icon(Icons.phone_iphone_outlined, size: 18),
@@ -3026,9 +3051,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
             Container(
               padding: mobileComposer
                   ? const EdgeInsets.fromLTRB(10, 9, 10, 9)
-                  : EdgeInsets.zero,
+                  : null,
               margin: mobileComposer
-                  ? EdgeInsets.zero
+                  ? null
                   : const EdgeInsets.fromLTRB(12, 10, 12, 12),
               decoration: mobileComposer
                   ? const BoxDecoration(color: SendHereColors.card)
@@ -3070,12 +3095,15 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                         ),
                       ],
                     )
+                  // No divider between the field and the tool row: on macOS an
+                  // extra sibling under the AppKitView broke the native text
+                  // view's hit testing, and visually the row reads fine without
+                  // one.
                   : Column(mainAxisSize: MainAxisSize.min, children: [
                       Padding(
                         padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
                         child: _composerField(),
                       ),
-                      const Divider(height: 1),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(6, 2, 8, 6),
                         child: Row(children: [
@@ -3086,7 +3114,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                               await widget.offerFiles();
                               if (Platform.isMacOS) _focusInput();
                             },
-                            round: false,
+                            filled: false,
                           ),
                           const Spacer(),
                           FilledButton(
@@ -3103,43 +3131,44 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   }
 }
 
-/// The ＋ next to the composer. Round with a chip fill on phones, where it sits
-/// directly on the bar; plain with a hover fill on desktop, where it lives
-/// inside the bordered composer box.
+/// The ＋ next to the composer: a thin outlined circle around a plus sign, so
+/// it reads as a deliberate control rather than a bare glyph floating in the
+/// bar. Phones fill it with [SendHereColors.chip]; desktop keeps it
+/// transparent until hover, since it sits inside the bordered composer box.
 class _ComposerIconButton extends StatelessWidget {
   const _ComposerIconButton({
     required this.icon,
     required this.tooltip,
     required this.onTap,
-    this.round = true,
+    this.filled = true,
   });
 
   final IconData icon;
   final String tooltip;
   final Future<void> Function() onTap;
-  final bool round;
+  final bool filled;
 
   @override
-  Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(round ? 16 : 8);
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: round ? SendHereColors.chip : Colors.transparent,
-        borderRadius: radius,
-        child: InkWell(
-          borderRadius: radius,
-          hoverColor: SendHereColors.chip,
-          onTap: onTap,
-          child: SizedBox(
-            width: round ? 32 : 34,
-            height: 32,
-            child: Icon(icon, size: 20, color: SendHereColors.ink),
+  Widget build(BuildContext context) => Tooltip(
+        message: tooltip,
+        child: Material(
+          color: filled ? SendHereColors.chip : Colors.transparent,
+          shape: const CircleBorder(
+            side: BorderSide(color: SendHereColors.line),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            hoverColor: SendHereColors.chip,
+            onTap: onTap,
+            child: SizedBox(
+              width: 32,
+              height: 32,
+              child: Icon(icon, size: 19, color: SendHereColors.ink),
+            ),
           ),
         ),
-      ),
-    );
-  }
+      );
 }
 
 /// The round send key on phones: an upward arrow on a filled accent circle.
@@ -3191,28 +3220,33 @@ class _MessageBubble extends StatelessWidget {
             crossAxisAlignment:
                 sent ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: sent
-                      ? SendHereColors.brandSoft
-                      : SendHereColors.chip,
-                  // The corner facing the sender is tightened, so a bubble
-                  // reads as pointing at its own side of the conversation.
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(SendHereRadius.bubble),
-                    topRight: const Radius.circular(SendHereRadius.bubble),
-                    bottomLeft: Radius.circular(sent
-                        ? SendHereRadius.bubble
-                        : SendHereRadius.bubbleTail),
-                    bottomRight: Radius.circular(sent
-                        ? SendHereRadius.bubbleTail
-                        : SendHereRadius.bubble),
-                  ),
+              // A Material (not a plain Container) so any InkWell inside paints
+              // its hover and splash within the bubble. On the nearest ancestor
+              // Material those effects escaped upwards over the header.
+              Material(
+                color: sent ? SendHereColors.brandSoft : SendHereColors.chip,
+                // The corner facing the sender is tightened, so a bubble
+                // reads as pointing at its own side of the conversation.
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(SendHereRadius.bubble),
+                  topRight: const Radius.circular(SendHereRadius.bubble),
+                  bottomLeft: Radius.circular(
+                      sent ? SendHereRadius.bubble : SendHereRadius.bubbleTail),
+                  bottomRight: Radius.circular(
+                      sent ? SendHereRadius.bubbleTail : SendHereRadius.bubble),
                 ),
-                child: file
+                clipBehavior: Clip.antiAlias,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: file
                     ? Column(mainAxisSize: MainAxisSize.min, children: [
                         InkWell(
+                          // Without an explicit shape the ink highlight is
+                          // painted on the nearest Material, which sits above
+                          // the conversation header, so hovering an image used
+                          // to bleed a rectangle over the title row.
+                          borderRadius: BorderRadius.circular(
+                              image ? SendHereRadius.thumb : 6),
                           onTap: event.localPath == null
                               ? null
                               : image
@@ -3274,7 +3308,8 @@ class _MessageBubble extends StatelessWidget {
                           ),
                         ],
                       ])
-                    : MessageText(event.text ?? ''),
+                      : MessageText(event.text ?? ''),
+                ),
               ),
               const SizedBox(height: 3),
               Text(

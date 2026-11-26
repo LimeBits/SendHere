@@ -1666,12 +1666,6 @@ class _SendHereHomeState extends State<SendHereHome>
                         : _connectedPeers[_selectedPeerId]?.name ?? '消息',
                     online: _selectedPeerId != null &&
                         _connectedPeers[_selectedPeerId]?.online == true,
-                    transport: _selectedPeerId == null
-                        ? null
-                        : _connectedPeers[_selectedPeerId]?.transport,
-                    tailscaleAddress: _selectedPeerId == null
-                        ? null
-                        : _connectedPeers[_selectedPeerId]?.tailscaleAddress,
                   )
                 : const Text('SendHere',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700))
@@ -2082,11 +2076,15 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                       onCollapse: widget.hidePhoneQr)
                   : Padding(
                       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                      // Both are low-frequency entry points, so neither takes
+                      // the screen's single filled highlight; that belongs to
+                      // the send button.
                       child: Row(children: [
                         Expanded(
-                          child: FilledButton.icon(
+                          child: OutlinedButton.icon(
                             onPressed: widget.connectPhone,
-                            icon: const Icon(Icons.phone_iphone_outlined),
+                            icon:
+                                const Icon(Icons.phone_iphone_outlined, size: 18),
                             label: const Text('手机'),
                           ),
                         ),
@@ -2166,8 +2164,11 @@ class _UnreadBadge extends StatelessWidget {
       height: height,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: Colors.red,
+          color: SendHereColors.unread,
           borderRadius: BorderRadius.circular(height / 2),
+          border: compact
+              ? Border.all(color: SendHereColors.card, width: 2)
+              : null,
         ),
         child: Center(
           child: Text(
@@ -2204,12 +2205,14 @@ class _DeviceAvatar extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             CircleAvatar(
-              backgroundColor: online
-                  ? null
-                  : Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: Icon(phone
-                  ? Icons.phone_iphone_outlined
-                  : Icons.computer_outlined),
+              backgroundColor:
+                  online ? SendHereColors.brandSoft : SendHereColors.chip,
+              child: Icon(
+                phone ? Icons.phone_iphone_outlined : Icons.computer_outlined,
+                size: 22,
+                color:
+                    online ? SendHereColors.brandText : const Color(0xFF9A9AA0),
+              ),
             ),
             if (unreadCount > 0)
               Positioned(
@@ -2291,11 +2294,12 @@ class _DeviceTile extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             device.online
-                ? const Icon(Icons.circle, size: 10, color: Colors.green)
-                : Icon(
+                ? const Icon(Icons.circle,
+                    size: 10, color: SendHereColors.online)
+                : const Icon(
                     Icons.cloud_off_outlined,
                     size: 16,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    color: SendHereColors.sub,
                   ),
           ],
         ),
@@ -2643,52 +2647,46 @@ class _MobileConversationTitle extends StatelessWidget {
   const _MobileConversationTitle({
     required this.name,
     required this.online,
-    this.transport,
-    this.tailscaleAddress,
   });
 
   final String name;
   final bool online;
-  final PeerTransport? transport;
-  final String? tailscaleAddress;
 
   @override
   Widget build(BuildContext context) {
-    final viaTailscale = online && transport == PeerTransport.tailscale;
+    // A phone only ever reaches LAN peers: it cannot add a remote computer
+    // (addRemoteDevice is null on mobile) and Tailscale is used solely between
+    // computer peers, which are dialled from mDNS discovery. So no transport
+    // badge is shown here; the desktop header still has one.
     return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style:
-                    const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+      children: [
+        Expanded(
+          child: Text(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
           ),
-          if (viaTailscale) ...[
-            const SizedBox(width: 6),
-            Tooltip(
-              message: tailscaleAddress == null
-                  ? '通过 Tailscale 远程连接\n回到同一 Wi-Fi 后自动切换到局域网'
-                  : '通过 Tailscale 远程连接（$tailscaleAddress）\n回到同一 Wi-Fi 后自动切换到局域网',
-              child: Icon(Icons.vpn_lock_outlined,
-                  size: 17,
-                  color: Theme.of(context).colorScheme.onSecondaryContainer),
-            ),
-          ],
-          const SizedBox(width: 7),
-          Tooltip(
-            message: online ? '在线' : '离线',
-            child: Icon(
-              online ? Icons.circle : Icons.cloud_off_outlined,
-              size: online ? 10 : 18,
-              color: online
-                  ? Colors.green
-                  : Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+        // Keeps the name optically centred against the leading back button.
+        SizedBox(
+          width: 34,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Tooltip(
+              message: online ? '在线' : '离线',
+              child: Icon(
+                online ? Icons.circle : Icons.cloud_off_outlined,
+                size: online ? 10 : 18,
+                color:
+                    online ? SendHereColors.online : SendHereColors.sub,
+              ),
             ),
           ),
-        ],
-      );
+        ),
+      ],
+    );
   }
 }
 
@@ -2993,11 +2991,12 @@ class _ConversationPanelState extends State<_ConversationPanel> {
             ),
             const Divider(height: 1),
             Container(
-              margin: const EdgeInsets.all(16),
+              margin: const EdgeInsets.fromLTRB(12, 10, 12, 12),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.black26),
+                color: SendHereColors.card,
+                borderRadius:
+                    BorderRadius.circular(SendHereRadius.box),
+                border: Border.all(color: SendHereColors.line),
               ),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 Padding(
@@ -3052,26 +3051,20 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                             await widget.offerFiles();
                             if (Platform.isMacOS) _focusInput();
                           },
-                          child: SizedBox(
+                          child: const SizedBox(
                             width: 34,
                             height: 32,
-                            child: Icon(
-                              Platform.isMacOS || Platform.isWindows
-                                  ? Icons.folder_open_outlined
-                                  : Icons.add_circle_outline,
-                              size: Platform.isMacOS || Platform.isWindows
-                                  ? 18
-                                  : 25,
-                            ),
+                            // "Add content" reads better than a folder, which
+                            // suggests opening a directory.
+                            child: Icon(Icons.add, size: 20),
                           ),
                         ),
                       ),
                     ),
                     const Spacer(),
-                    FilledButton.icon(
+                    FilledButton(
                         onPressed: () => _submit(widget.controller.text),
-                        icon: const Icon(Icons.send),
-                        label: const Text('发送')),
+                        child: const Text('发送')),
                   ]),
                 ),
               ]),
@@ -3098,7 +3091,6 @@ class _MessageBubble extends StatelessWidget {
     final sent = event.direction == TransferDirection.sent;
     final file = event.type == TransferEventType.file;
     final image = file && _isImage(event.fileName);
-    final scheme = Theme.of(context).colorScheme;
     final time = TimeOfDay.fromDateTime(event.createdAt).format(context);
     return Align(
       alignment: sent ? Alignment.centerRight : Alignment.centerLeft,
@@ -3114,9 +3106,20 @@ class _MessageBubble extends StatelessWidget {
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: sent
-                      ? scheme.primaryContainer
-                      : scheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(14),
+                      ? SendHereColors.brandSoft
+                      : SendHereColors.chip,
+                  // The corner facing the sender is tightened, so a bubble
+                  // reads as pointing at its own side of the conversation.
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(SendHereRadius.bubble),
+                    topRight: const Radius.circular(SendHereRadius.bubble),
+                    bottomLeft: Radius.circular(sent
+                        ? SendHereRadius.bubble
+                        : SendHereRadius.bubbleTail),
+                    bottomRight: Radius.circular(sent
+                        ? SendHereRadius.bubbleTail
+                        : SendHereRadius.bubble),
+                  ),
                 ),
                 child: file
                     ? Column(mainAxisSize: MainAxisSize.min, children: [

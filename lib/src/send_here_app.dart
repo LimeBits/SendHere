@@ -1604,9 +1604,7 @@ class _SendHereHomeState extends State<SendHereHome>
         // Desktop has no title bar, so panels run to the top edge. Only the
         // sidebar needs to clear the floating traffic lights, and it adds that
         // inset itself; the conversation header sits flush.
-        padding: mobile
-            ? EdgeInsets.zero
-            : const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        padding: EdgeInsets.zero,
         child: _error != null
             ? _ErrorView(error: _error!, retry: _startServer)
             : _server == null
@@ -1724,9 +1722,12 @@ class _SendHereHomeState extends State<SendHereHome>
                                   ),
                           );
                         }
+                        // One surface split by a hairline: grey paper on the
+                        // left, white on the right. No gap and no nested
+                        // cards, so the window reads as a single panel.
                         return Row(children: [
                           SizedBox(width: 252, child: sidebar),
-                          const SizedBox(width: 14),
+                          const VerticalDivider(width: 0.5),
                           Expanded(child: conversation),
                         ]);
                       }),
@@ -1741,60 +1742,70 @@ enum _AttachmentSource { photos, files }
 /// resolves the host, probes it, and dials the WebSocket connection.
 enum _RemoteAddStage { resolving, found, connecting, connected }
 
-/// Shows the current _RemoteAddStage as one line of text plus a thin bar. The
-/// earlier version stacked three circled steps, which was tall, widely spaced
-/// and visually noisy inside a narrow panel.
+/// Shows the current _RemoteAddStage as three labelled steps joined by
+/// connectors (已找到 → 正在建立连接 → 已连接). "resolving" (DNS lookup) has no
+/// step of its own; it reads as "已找到" not yet reached.
 class _RemoteAddProgress extends StatelessWidget {
   const _RemoteAddProgress({required this.stage});
 
   final _RemoteAddStage stage;
 
-  /// Label, step number and bar fraction per stage. "resolving" and "found"
-  /// are both step 1: a DNS lookup that has returned is still just the address
-  /// being resolved, from the user's point of view.
-  (String, int, double) get _state => switch (stage) {
-        _RemoteAddStage.resolving => ('正在解析地址', 1, 0.33),
-        _RemoteAddStage.found => ('已找到设备', 1, 0.5),
-        _RemoteAddStage.connecting => ('正在建立连接', 2, 0.75),
-        _RemoteAddStage.connected => ('已连接', 3, 1),
+  static const _steps = ['已找到', '正在建立连接', '已连接'];
+
+  int get _activeIndex => switch (stage) {
+        _RemoteAddStage.resolving => -1,
+        _RemoteAddStage.found => 0,
+        _RemoteAddStage.connecting => 1,
+        _RemoteAddStage.connected => 2,
       };
 
   @override
   Widget build(BuildContext context) {
-    final (label, step, fraction) = _state;
-    final done = stage == _RemoteAddStage.connected;
-    final accent = done ? SendHereColors.online : SendHereColors.brand;
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Row(children: [
-        SizedBox(
-          width: 12,
-          height: 12,
-          child: done
-              ? const Icon(Icons.check, size: 12, color: SendHereColors.online)
-              : CircularProgressIndicator(strokeWidth: 1.6, color: accent),
-        ),
-        const SizedBox(width: 6),
-        Text(label,
-            style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: SendHereColors.ink)),
-        if (!done)
-          Text(' · $step / 3',
-              style:
-                  const TextStyle(fontSize: 11, color: SendHereColors.sub)),
-      ]),
-      const SizedBox(height: 5),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(99),
-        child: LinearProgressIndicator(
-          value: fraction,
-          minHeight: 3,
-          backgroundColor: SendHereColors.chip,
-          valueColor: AlwaysStoppedAnimation(accent),
-        ),
-      ),
-    ]);
+    final activeIndex = _activeIndex;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: List.generate(_steps.length * 2 - 1, (index) {
+        if (index.isOdd) {
+          final completed = index ~/ 2 < activeIndex;
+          return Expanded(
+            child: Container(
+              height: 2,
+              // Sits level with the centre of the 16 pt markers.
+              margin: const EdgeInsets.fromLTRB(4, 7, 4, 0),
+              color:
+                  completed ? SendHereColors.brand : SendHereColors.line,
+            ),
+          );
+        }
+        final stepIndex = index ~/ 2;
+        final reached = stepIndex <= activeIndex;
+        final current = stepIndex == activeIndex;
+        final isLast = stepIndex == _steps.length - 1;
+        final accent =
+            isLast && reached ? SendHereColors.online : SendHereColors.brand;
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: current && !isLast
+                ? CircularProgressIndicator(
+                    strokeWidth: 1.8, color: accent)
+                : Icon(
+                    reached ? Icons.check_circle : Icons.circle_outlined,
+                    size: 16,
+                    color: reached ? accent : SendHereColors.line,
+                  ),
+          ),
+          const SizedBox(height: 4),
+          Text(_steps[stepIndex],
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: reached ? FontWeight.w600 : FontWeight.w400,
+                  color: reached ? accent : SendHereColors.sub)),
+        ]);
+      }),
+    );
   }
 }
 
@@ -1957,13 +1968,14 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
         if (widget.phoneQrExpanded) widget.hidePhoneQr();
         if (widget.remoteAddExpanded) widget.hideRemoteAdd();
       },
-      child: Stack(children: [
-        Card(
-          // The sidebar shares the page background so the list no longer looks
-          // like a white card nested inside another white card. Mobile keeps the
-          // plain card, where the list is the whole screen.
-          color: mobile ? null : SendHereColors.paper,
-          clipBehavior: Clip.antiAlias,
+      // Panels are wider than the sidebar and overhang into the conversation
+      // area, so the stack must not clip them.
+      child: Stack(clipBehavior: Clip.none, children: [
+        // Desktop: a flat grey column, not a card. The hairline next to it does
+        // the separating, so a border and corner radius here would re-create
+        // the nested-panel look the design moved away from.
+        Container(
+          color: mobile ? SendHereColors.card : SendHereColors.paper,
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Padding(
@@ -2046,10 +2058,13 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
         // Both panels float over the list in the same slot, anchored under the
         // ＋, with a soft shadow so neither reads as another device row.
         if (!mobile && (widget.phoneQrExpanded || widget.remoteAddExpanded))
+          // Wider than the sidebar: the panels need room for a readable QR
+          // code and for a full Tailscale address, so they overhang into the
+          // conversation area rather than being squeezed into 228 points.
           Positioned(
             left: 12,
-            right: 12,
-            top: 66,
+            width: 290,
+            top: 62,
             child: GestureDetector(
               // Absorbs taps so clicking inside the panel does not reach the
               // sidebar's dismiss handler.
@@ -2148,40 +2163,67 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
         Text(
           address == null
               ? '本机未检测到 Tailscale 地址，请先打开 Tailscale。'
-              : '在对方电脑打开 SendHere，输入它的 Tailscale 地址。\n本机 $address',
-          style: const TextStyle(fontSize: 11, color: SendHereColors.sub),
+              : '在对方电脑上打开 SendHere，然后输入它的 Tailscale 地址或主机名。',
+          style: const TextStyle(
+              fontSize: 11.5, height: 1.55, color: SendHereColors.sub),
         ),
-        const SizedBox(height: 9),
+        if (address != null) ...[
+          const SizedBox(height: 6),
+          Row(children: [
+            const Text('本机',
+                style:
+                    TextStyle(fontSize: 11, color: SendHereColors.sub)),
+            const SizedBox(width: 6),
+            Expanded(
+              child: SelectableText(address,
+                  maxLines: 1,
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'Menlo',
+                      color: SendHereColors.ink)),
+            ),
+          ]),
+        ],
+        const SizedBox(height: 12),
         TextField(
           controller: _controller,
           autofocus: true,
           enabled: !_busy,
-          style: const TextStyle(fontSize: 11.5, fontFamily: 'Menlo'),
+          style: const TextStyle(fontSize: 12, fontFamily: 'Menlo'),
           decoration: InputDecoration(
             hintText: '100.x.x.x 或 host.ts.net',
-            hintStyle:
-                const TextStyle(fontSize: 11.5, color: Color(0xFF9A9AA0)),
+            hintStyle: const TextStyle(
+                fontSize: 12, fontFamily: 'Menlo', color: Color(0xFF9A9AA0)),
             errorText: _error,
-            errorStyle: const TextStyle(fontSize: 10.5),
+            errorStyle: const TextStyle(fontSize: 10.5, height: 1.4),
             isDense: true,
             contentPadding:
-                const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(9),
               borderSide: const BorderSide(color: SendHereColors.line),
             ),
             enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(9),
               borderSide: const BorderSide(color: SendHereColors.line),
             ),
           ),
           onSubmitted: (_) => _submit(),
         ),
-        if (_stage != null) ...[
-          const SizedBox(height: 9),
-          _RemoteAddProgress(stage: _stage!),
-        ],
-        const SizedBox(height: 10),
+        // Reserve the step row's height from the start so the panel does not
+        // jump taller the moment a connection attempt begins.
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 34,
+          child: _stage == null
+              ? const Center(
+                  child: Text('输入地址后按回车或点"添加"',
+                      style: TextStyle(
+                          fontSize: 10.5, color: SendHereColors.sub)),
+                )
+              : _RemoteAddProgress(stage: _stage!),
+        ),
+        const SizedBox(height: 12),
         Row(mainAxisAlignment: MainAxisAlignment.end, children: [
           TextButton(
             onPressed: _busy ? null : widget.onClose,
@@ -2189,17 +2231,17 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
               foregroundColor: SendHereColors.sub,
               visualDensity: VisualDensity.compact,
             ),
-            child: const Text('取消', style: TextStyle(fontSize: 11.5)),
+            child: const Text('取消', style: TextStyle(fontSize: 12)),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 6),
           FilledButton(
             onPressed: _busy ? null : _submit,
             style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              textStyle: const TextStyle(
-                  fontSize: 11.5, fontWeight: FontWeight.w600),
+                  borderRadius: BorderRadius.circular(9)),
+              textStyle:
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
             child: const Text('添加'),
           ),
@@ -2854,7 +2896,7 @@ class _PhoneConnectCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: SendHereColors.line),
               ),
-              child: QrImageView(data: url, size: 148),
+              child: QrImageView(data: url, size: 196),
             ),
           ),
           if (networkToggle != null) networkToggle!,
@@ -3193,6 +3235,75 @@ class _ConversationPanelState extends State<_ConversationPanel> {
     _nativeFieldKey.currentState?.clear();
   }
 
+  /// Desktop composer: a bordered box with the tall multi-line field on top
+  /// and a tool row beneath. Structurally identical to the layout that shipped
+  /// before the redesign, because the AppKitView below only keeps working
+  /// mouse input when its ancestor chain stays stable across rebuilds.
+  Widget _desktopComposer() => Container(
+        margin: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        decoration: BoxDecoration(
+          color: SendHereColors.card,
+          borderRadius: BorderRadius.circular(SendHereRadius.box),
+          border: Border.all(color: SendHereColors.line),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+            child: _composerField(),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(6, 2, 8, 6),
+            child: Row(children: [
+              _ComposerIconButton(
+                icon: Icons.add,
+                tooltip: '添加附件',
+                onTap: () async {
+                  await widget.offerFiles();
+                  if (Platform.isMacOS) _focusInput();
+                },
+                filled: false,
+              ),
+              const Spacer(),
+              FilledButton(
+                  onPressed: () => _submit(widget.controller.text),
+                  child: const Text('发送')),
+            ]),
+          ),
+        ]),
+      );
+
+  /// Mobile composer: ＋, the field and a round send key on one row, all
+  /// bottom-aligned so the field grows upwards without moving the buttons.
+  Widget _mobileComposer() => Container(
+        padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+        decoration: const BoxDecoration(color: SendHereColors.card),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            _ComposerIconButton(
+              icon: Icons.add,
+              tooltip: '添加附件',
+              onTap: widget.offerFiles,
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: SendHereColors.chip,
+                  borderRadius: BorderRadius.circular(17),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  child: _composerField(),
+                ),
+              ),
+            ),
+            const SizedBox(width: 9),
+            _SendKey(onTap: () => _submit(widget.controller.text)),
+          ],
+        ),
+      );
+
   /// The text input itself, shared by the one-row mobile composer and the
   /// taller desktop box so both keep the same IME, paste and drop behaviour.
   Widget _composerField() => NativeTextField(
@@ -3301,8 +3412,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
       },
       child: Transform.translate(
         offset: Offset(_backDragOffset, 0),
-        child: Card(
-          clipBehavior: Clip.antiAlias,
+        // White, flat and edge-to-edge: the hairline on its left separates it
+        // from the grey sidebar, so no card chrome is needed here either.
+        child: Container(
+          color: SendHereColors.card,
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             if (!(Platform.isIOS || Platform.isAndroid))
@@ -3335,82 +3448,12 @@ class _ConversationPanelState extends State<_ConversationPanel> {
               ),
             ),
             const Divider(height: 1),
-            Container(
-              padding: mobileComposer
-                  ? const EdgeInsets.fromLTRB(10, 9, 10, 9)
-                  : null,
-              margin: mobileComposer
-                  ? null
-                  : const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              decoration: mobileComposer
-                  ? const BoxDecoration(color: SendHereColors.card)
-                  : BoxDecoration(
-                      color: SendHereColors.card,
-                      borderRadius:
-                          BorderRadius.circular(SendHereRadius.box),
-                      border: Border.all(color: SendHereColors.line),
-                    ),
-              child: mobileComposer
-                  // Phones put everything on one row: ＋, the field, then a
-                  // round send key, all bottom-aligned so the field can grow
-                  // upwards without moving the buttons.
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        _ComposerIconButton(
-                          icon: Icons.add,
-                          tooltip: '添加附件',
-                          onTap: widget.offerFiles,
-                        ),
-                        const SizedBox(width: 9),
-                        Expanded(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: SendHereColors.chip,
-                              borderRadius: BorderRadius.circular(17),
-                            ),
-                            child: Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 5),
-                              child: _composerField(),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 9),
-                        _SendKey(
-                          onTap: () => _submit(widget.controller.text),
-                        ),
-                      ],
-                    )
-                  // No divider between the field and the tool row: on macOS an
-                  // extra sibling under the AppKitView broke the native text
-                  // view's hit testing, and visually the row reads fine without
-                  // one.
-                  : Column(mainAxisSize: MainAxisSize.min, children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-                        child: _composerField(),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(6, 2, 8, 6),
-                        child: Row(children: [
-                          _ComposerIconButton(
-                            icon: Icons.add,
-                            tooltip: '添加附件',
-                            onTap: () async {
-                              await widget.offerFiles();
-                              if (Platform.isMacOS) _focusInput();
-                            },
-                            filled: false,
-                          ),
-                          const Spacer(),
-                          FilledButton(
-                              onPressed: () => _submit(widget.controller.text),
-                              child: const Text('发送')),
-                        ]),
-                      ),
-                    ]),
-            ),
+            // Desktop and mobile build separate, statically-shaped subtrees.
+            // Choosing the layout with inline ternaries inside one Container
+            // changed the widget identity above the AppKitView on every
+            // rebuild, which tore down and recreated the native NSTextView and
+            // left it unable to accept mouse clicks.
+            mobileComposer ? _mobileComposer() : _desktopComposer(),
           ]),
         ),
       ),

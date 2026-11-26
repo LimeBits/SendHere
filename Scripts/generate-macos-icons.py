@@ -21,10 +21,14 @@ def make_icon(size: int) -> Image.Image:
     image = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
 
-    inset = canvas * 0.02
+    # macOS app icons are expected to leave a margin inside the canvas: the
+    # system draws them at a size that assumes the artwork does not run to the
+    # edge. 0.075 reproduces the 85% squircle that ships in the asset set, so
+    # the Dock and Launchpad render it at the same visual weight as other apps.
+    inset = canvas * 0.075
     draw.rounded_rectangle(
         (inset, inset, canvas - inset, canvas - inset),
-        radius=canvas * 0.20,
+        radius=canvas * 0.185,
         fill=BLUE,
     )
 

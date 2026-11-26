@@ -1575,16 +1575,28 @@ class _SendHereHomeState extends State<SendHereHome>
     final mobile = Platform.isIOS || Platform.isAndroid;
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        // Mobile screens are white end to end, so the bar must not sit on the
+        // grey page colour and leave a seam above the list.
+        backgroundColor: mobile
+            ? SendHereColors.card
+            : Theme.of(context).scaffoldBackgroundColor,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         toolbarHeight: mobile ? kToolbarHeight : 0,
         automaticallyImplyLeading: false,
-        // The list screen's title sits on the left. A conversation title does
-        // its own three-column centring, so it must not also be centred here.
-        centerTitle: false,
-        titleSpacing: mobile && !_showMobileConversation ? 14 : null,
+        // The list screen's title sits on the left; a conversation centres the
+        // device name with its status dot as one unit.
+        centerTitle: mobile && _showMobileConversation,
+        titleSpacing: mobile && !_showMobileConversation ? 16 : null,
+        // A straight hairline closes off the header, instead of the list
+        // fading into it.
+        bottom: mobile
+            ? const PreferredSize(
+                preferredSize: Size.fromHeight(0.5),
+                child: Divider(height: 0.5, thickness: 0.5),
+              )
+            : null,
         leading: mobile && _showMobileConversation
             ? IconButton(
                 tooltip: '返回设备列表',
@@ -1596,24 +1608,15 @@ class _SendHereHomeState extends State<SendHereHome>
         actions: mobile && !_showMobileConversation
             ? [
                 Padding(
-                  padding: const EdgeInsets.only(right: 14),
-                  child: Tooltip(
-                    message: '连接此手机',
-                    child: Material(
-                      color: SendHereColors.brandSoft,
-                      shape: const CircleBorder(),
-                      clipBehavior: Clip.antiAlias,
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: _showMobileConnectQr,
-                        child: const SizedBox(
-                          width: 34,
-                          height: 34,
-                          child: Icon(Icons.add,
-                              size: 19, color: SendHereColors.brandText),
-                        ),
-                      ),
-                    ),
+                  padding: const EdgeInsets.only(right: 12),
+                  // Same outlined circle as the composer's ＋, so both "add"
+                  // entry points look like one control in two places.
+                  child: _ComposerIconButton(
+                    icon: Icons.add,
+                    tooltip: '连接此手机',
+                    onTap: () async => _showMobileConnectQr(),
+                    filled: false,
+                    size: 36,
                   ),
                 ),
               ]
@@ -1628,7 +1631,10 @@ class _SendHereHomeState extends State<SendHereHome>
                         _connectedPeers[_selectedPeerId]?.online == true,
                   )
                 : const Text('SendHere',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700))
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3))
             : null,
       ),
       body: Padding(
@@ -2012,11 +2018,10 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
       // Panels are wider than the sidebar and overhang into the conversation
       // area, so the stack must not clip them.
       child: Stack(clipBehavior: Clip.none, children: [
-        // Flat grey on both platforms. Desktop relies on the hairline beside it
-        // to separate the panes; mobile puts the device rows in a white card
-        // that floats on this grey, so a border or radius here would double up.
+        // Desktop is flat grey and leans on the hairline beside it to separate
+        // the panes. Mobile runs a white list edge to edge, iOS-settings style.
         Container(
-          color: SendHereColors.paper,
+          color: mobile ? SendHereColors.card : SendHereColors.paper,
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           // Desktop only: the phone already names the screen in its app bar
@@ -2059,11 +2064,7 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                           style: TextStyle(color: SendHereColors.sub)),
                     ),
                   )
-                : _MaybeCard(
-                    // Mobile groups the rows into one white card on the grey
-                    // page; desktop rows are individually rounded instead.
-                    enabled: mobile,
-                    child: ListView.separated(
+                : ListView.separated(
                     // Desktop insets the rounded rows from the sidebar edges.
                     padding: mobile
                         ? EdgeInsets.zero
@@ -2088,48 +2089,22 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                             widget.connectingPeerIds.contains(device.id),
                       );
                     },
-                      separatorBuilder: (_, __) => mobile
-                        // Starts where the name does: 12 padding + 44 avatar
-                        // + 11 gap, so the divider never cuts under an icon.
+                    separatorBuilder: (_, __) => mobile
+                        // Starts where the name does, so the divider never
+                        // cuts under an avatar.
                         ? const Divider(
                             height: 0.5,
                             thickness: 0.5,
-                            indent: 67,
+                            indent: 64,
                             endIndent: 0,
                             color: SendHereColors.line,
                           )
                         : const SizedBox(height: 1),
-                    ),
                   ),
             ),
           ]),
         ),
       ]),
-    );
-  }
-}
-
-/// Wraps [child] in the mobile device-list card: white, 16 pt corners, a
-/// hairline border and a 10 pt inset from the page edges. A no-op when
-/// [enabled] is false, so desktop keeps its flat, edge-to-edge list.
-class _MaybeCard extends StatelessWidget {
-  const _MaybeCard({required this.enabled, required this.child});
-
-  final bool enabled;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!enabled) return child;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-      decoration: BoxDecoration(
-        color: SendHereColors.card,
-        borderRadius: BorderRadius.circular(SendHereRadius.card),
-        border: Border.all(color: SendHereColors.line, width: 0.5),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: child,
     );
   }
 }
@@ -2666,10 +2641,10 @@ class _DeviceTile extends StatelessWidget {
             ? const RoundedRectangleBorder(
                 borderRadius: BorderRadius.all(Radius.circular(10)))
             : null,
-        contentPadding: desktop
-            ? const EdgeInsets.symmetric(horizontal: 8)
-            : null,
-        horizontalTitleGap: desktop ? 9 : null,
+        // Mobile pushes the avatar and the status icon out towards the screen
+        // edges; ListTile's default 16 left both floating well inside.
+        contentPadding: EdgeInsets.symmetric(horizontal: desktop ? 8 : 10),
+        horizontalTitleGap: desktop ? 9 : 10,
         leading: _DeviceAvatar(
           phone: phone,
           online: device.online,
@@ -3102,31 +3077,27 @@ class _MobileConversationTitle extends StatelessWidget {
     // (addRemoteDevice is null on mobile) and Tailscale is used solely between
     // computer peers, which are dialled from mDNS discovery. So no transport
     // badge is shown here; the desktop header still has one.
+    // The status dot sits right after the name rather than pinned to the far
+    // right, so it reads as a property of this device instead of a separate
+    // indicator for the screen.
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Expanded(
+        Flexible(
           child: Text(
             name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
           ),
         ),
-        // Keeps the name optically centred against the leading back button.
-        SizedBox(
-          width: 34,
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: Tooltip(
-              message: online ? '在线' : '离线',
-              child: Icon(
-                online ? Icons.circle : Icons.cloud_off_outlined,
-                size: online ? 10 : 18,
-                color:
-                    online ? SendHereColors.online : SendHereColors.sub,
-              ),
-            ),
+        const SizedBox(width: 7),
+        Tooltip(
+          message: online ? '在线' : '离线',
+          child: Icon(
+            online ? Icons.circle : Icons.cloud_off_outlined,
+            size: online ? 9 : 17,
+            color: online ? SendHereColors.online : SendHereColors.sub,
           ),
         ),
       ],
@@ -3385,7 +3356,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
               icon: Icons.add,
               tooltip: '添加附件',
               onTap: widget.offerFiles,
-              size: 36,
+              // Same 42 as the field and the send key, so the row is one band
+              // of equal-height controls.
+              size: 42,
+              filled: false,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -3592,7 +3566,9 @@ class _ComposerIconButton extends StatelessWidget {
         child: Material(
           color: filled ? SendHereColors.chip : Colors.transparent,
           shape: const CircleBorder(
-            side: BorderSide(color: SendHereColors.line),
+            // Darker than the hairline used for dividers: at 42 pt a 0xEB
+            // outline all but disappears.
+            side: BorderSide(color: Color(0xFFD6D6DA)),
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(

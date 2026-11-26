@@ -1581,6 +1581,10 @@ class _SendHereHomeState extends State<SendHereHome>
         scrolledUnderElevation: 0,
         toolbarHeight: mobile ? kToolbarHeight : 0,
         automaticallyImplyLeading: false,
+        // The list screen's title sits on the left. A conversation title does
+        // its own three-column centring, so it must not also be centred here.
+        centerTitle: false,
+        titleSpacing: mobile && !_showMobileConversation ? 14 : null,
         leading: mobile && _showMobileConversation
             ? IconButton(
                 tooltip: '返回设备列表',
@@ -1592,11 +1596,24 @@ class _SendHereHomeState extends State<SendHereHome>
         actions: mobile && !_showMobileConversation
             ? [
                 Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: IconButton.filledTonal(
-                    tooltip: '连接此手机',
-                    onPressed: _showMobileConnectQr,
-                    icon: const Icon(Icons.add),
+                  padding: const EdgeInsets.only(right: 14),
+                  child: Tooltip(
+                    message: '连接此手机',
+                    child: Material(
+                      color: SendHereColors.brandSoft,
+                      shape: const CircleBorder(),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: _showMobileConnectQr,
+                        child: const SizedBox(
+                          width: 34,
+                          height: 34,
+                          child: Icon(Icons.add,
+                              size: 19, color: SendHereColors.brandText),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ]
@@ -1995,32 +2012,34 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
       // Panels are wider than the sidebar and overhang into the conversation
       // area, so the stack must not clip them.
       child: Stack(clipBehavior: Clip.none, children: [
-        // Desktop: a flat grey column, not a card. The hairline next to it does
-        // the separating, so a border and corner radius here would re-create
-        // the nested-panel look the design moved away from.
+        // Flat grey on both platforms. Desktop relies on the hairline beside it
+        // to separate the panes; mobile puts the device rows in a white card
+        // that floats on this grey, so a border or radius here would double up.
         Container(
-          color: mobile ? SendHereColors.card : SendHereColors.paper,
+          color: SendHereColors.paper,
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Padding(
-            // Desktop keeps 36 at the top so the macOS traffic lights, which
-            // float over the content, never cover the title or the ＋.
-            padding: EdgeInsets.fromLTRB(14, mobile ? 14 : 36, 10, 8),
-            child: Row(children: [
-              const Expanded(
-                child: Text('设备列表',
-                    style:
-                        TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              ),
-              if (!mobile)
+          // Desktop only: the phone already names the screen in its app bar
+          // ("SendHere") and puts the ＋ there, so repeating a 设备列表 heading
+          // inside the list would be a second title for the same screen.
+          if (!mobile)
+            Padding(
+              // 36 at the top keeps the macOS traffic lights, which float over
+              // the content, clear of the title and the ＋.
+              padding: const EdgeInsets.fromLTRB(14, 36, 10, 8),
+              child: Row(children: [
+                const Expanded(
+                  child: Text('设备列表',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
                 _AddDeviceButton(
-                  active:
-                      widget.phoneQrExpanded || widget.remoteAddExpanded,
+                  active: widget.phoneQrExpanded || widget.remoteAddExpanded,
                   connectPhone: widget.connectPhone,
                   addRemoteDevice: widget.addRemoteDevice,
                 ),
-            ]),
-          ),
+              ]),
+            ),
           if (mobile &&
               widget.notificationPermission != null &&
               widget.notificationPermission != 'authorized' &&
@@ -2040,7 +2059,11 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                           style: TextStyle(color: SendHereColors.sub)),
                     ),
                   )
-                : ListView.separated(
+                : _MaybeCard(
+                    // Mobile groups the rows into one white card on the grey
+                    // page; desktop rows are individually rounded instead.
+                    enabled: mobile,
+                    child: ListView.separated(
                     // Desktop insets the rounded rows from the sidebar edges.
                     padding: mobile
                         ? EdgeInsets.zero
@@ -2065,21 +2088,48 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                             widget.connectingPeerIds.contains(device.id),
                       );
                     },
-                    separatorBuilder: (_, __) => mobile
-                        ? Divider(
-                            height: 1,
+                      separatorBuilder: (_, __) => mobile
+                        // Starts where the name does: 12 padding + 44 avatar
+                        // + 11 gap, so the divider never cuts under an icon.
+                        ? const Divider(
+                            height: 0.5,
                             thickness: 0.5,
-                            indent: 72,
-                            color: Theme.of(context)
-                                .dividerColor
-                                .withValues(alpha: 0.55),
+                            indent: 67,
+                            endIndent: 0,
+                            color: SendHereColors.line,
                           )
                         : const SizedBox(height: 1),
+                    ),
                   ),
             ),
           ]),
         ),
       ]),
+    );
+  }
+}
+
+/// Wraps [child] in the mobile device-list card: white, 16 pt corners, a
+/// hairline border and a 10 pt inset from the page edges. A no-op when
+/// [enabled] is false, so desktop keeps its flat, edge-to-edge list.
+class _MaybeCard extends StatelessWidget {
+  const _MaybeCard({required this.enabled, required this.child});
+
+  final bool enabled;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!enabled) return child;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+      decoration: BoxDecoration(
+        color: SendHereColors.card,
+        borderRadius: BorderRadius.circular(SendHereRadius.card),
+        border: Border.all(color: SendHereColors.line, width: 0.5),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: child,
     );
   }
 }
@@ -2605,7 +2655,8 @@ class _DeviceTile extends StatelessWidget {
     final statusLabel = _statusLabel(context);
     final desktop = !Platform.isIOS && !Platform.isAndroid;
     final tile = Material(
-      color: SendHereColors.paper,
+      // Mobile rows sit inside a white card; desktop rows sit on grey paper.
+      color: desktop ? SendHereColors.paper : SendHereColors.card,
       child: ListTile(
         selected: selected,
         selectedTileColor: SendHereColors.brandSoft,
@@ -2657,7 +2708,8 @@ class _DeviceTile extends StatelessWidget {
         reveal: reveal,
         collapse: collapse,
         revealedChild: Material(
-          color: SendHereColors.paper,
+          // Matches [tile] so the row keeps one background while sliding.
+          color: desktop ? SendHereColors.paper : SendHereColors.card,
           child: ListTile(
             minVerticalPadding: 7,
             title: Text(
@@ -3196,8 +3248,13 @@ class _ConversationPanel extends StatefulWidget {
 }
 
 class _ConversationPanelState extends State<_ConversationPanel> {
-  static const _minimumComposeHeight = 96.0;
-  static const _maximumComposeHeight = 180.0;
+  /// The desktop composer is a tall multi-line box; the mobile one is a single
+  /// row that grows upwards from one line, so they need different bounds. The
+  /// desktop numbers used to apply to both, which left phones with a 96 pt
+  /// field sitting in a one-line layout.
+  static bool get _mobileLayout => Platform.isIOS || Platform.isAndroid;
+  static double get _minimumComposeHeight => _mobileLayout ? 34.0 : 96.0;
+  static double get _maximumComposeHeight => _mobileLayout ? 112.0 : 180.0;
 
   final _nativeFieldKey = GlobalKey<NativeTextFieldState>();
   final _scrollController = ScrollController();
@@ -3313,7 +3370,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   /// Mobile composer: ＋, the field and a round send key on one row, all
   /// bottom-aligned so the field grows upwards without moving the buttons.
   Widget _mobileComposer() => Container(
-        padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+        // Clears the home indicator without leaving a gap on devices that have
+        // no inset. Scaffold already keeps the keyboard out of the way.
+        padding: EdgeInsets.fromLTRB(
+            10, 9, 10, 9 + MediaQuery.of(context).padding.bottom),
         decoration: const BoxDecoration(color: SendHereColors.card),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -3475,7 +3535,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                     : ListView.builder(
                         controller: _scrollController,
                         reverse: true,
-                        padding: const EdgeInsets.all(18),
+                        padding: EdgeInsets.all(mobileComposer ? 12 : 18),
                         itemCount: messages.length,
                         itemBuilder: (_, index) => _MessageBubble(
                           event: messages[index],
@@ -3581,7 +3641,12 @@ class _MessageBubble extends StatelessWidget {
     return Align(
       alignment: sent ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        // Phones cap bubbles at a share of the width so a long message still
+        // leaves the opposite edge visible; desktop caps at a readable measure.
+        constraints: BoxConstraints(
+            maxWidth: Platform.isIOS || Platform.isAndroid
+                ? MediaQuery.of(context).size.width * 0.76
+                : 520),
         child: Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: Column(

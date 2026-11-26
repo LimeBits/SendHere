@@ -200,12 +200,17 @@ Future<void> _showImagePreview(
   }
   await Navigator.of(context).push(
     PageRouteBuilder<void>(
-      opaque: true,
-      transitionDuration: const Duration(milliseconds: 180),
-      reverseTransitionDuration: const Duration(milliseconds: 140),
-      pageBuilder: (_, animation, __) => FadeTransition(
-        opacity: animation,
-        child: _ImagePreviewPage(filePath: filePath, fileName: fileName),
+      // Transparent so the Hero appears to lift off the conversation while the
+      // backdrop fades in behind it, rather than cutting to a black screen.
+      opaque: false,
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 260),
+      reverseTransitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (_, __, ___) =>
+          _ImagePreviewPage(filePath: filePath, fileName: fileName),
+      transitionsBuilder: (_, animation, __, child) => FadeTransition(
+        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+        child: child,
       ),
     ),
   );
@@ -227,7 +232,16 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
   int _activePointers = 0;
   bool _closing = false;
 
+  /// How far the image has been dragged towards dismissal. Drives both its own
+  /// offset/scale and the backdrop opacity, so the picture appears to be
+  /// pulled back down to its bubble rather than snapping shut.
+  Offset _dragOffset = Offset.zero;
+
   bool get _mobile => Platform.isIOS || Platform.isAndroid;
+
+  /// 1 at rest, falling towards 0 as the drag approaches the dismiss point.
+  double get _dragProgress =>
+      (1 - (_dragOffset.dy.abs() / 320)).clamp(0.0, 1.0);
 
   void _close() {
     if (_closing) return;
@@ -242,14 +256,24 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
 
   void _handlePointerMove(PointerMoveEvent event) {
     if (!_mobile || _activePointers != 1 || _dragStart == null) return;
+    // A zoomed-in image pans instead of dismissing.
     if (_transformationController.value.getMaxScaleOnAxis() > 1.02) return;
     final delta = event.position - _dragStart!;
-    if (delta.dy > 120 && delta.dy > delta.dx.abs() * 1.25) _close();
+    if (delta.dy <= 0 || delta.dy < delta.dx.abs() * 1.25) return;
+    setState(() => _dragOffset = delta);
   }
 
   void _handlePointerEnd(PointerEvent event) {
     if (_activePointers > 0) _activePointers--;
     if (_activePointers == 0) _dragStart = null;
+    if (_dragOffset == Offset.zero) return;
+    // Past the threshold the Hero carries the image back to its bubble;
+    // short of it the image springs back into place.
+    if (_dragOffset.dy > 110) {
+      _close();
+    } else {
+      setState(() => _dragOffset = Offset.zero);
+    }
   }
 
   @override
@@ -260,8 +284,11 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
 
   @override
   Widget build(BuildContext context) {
+    final progress = _dragProgress;
     return Scaffold(
-      backgroundColor: Colors.black,
+      // Fades with the drag so the conversation shows through as the image is
+      // pulled away.
+      backgroundColor: Colors.black.withValues(alpha: progress),
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -273,48 +300,64 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
               onPointerMove: _handlePointerMove,
               onPointerUp: _handlePointerEnd,
               onPointerCancel: _handlePointerEnd,
-              child: InteractiveViewer(
-                transformationController: _transformationController,
-                minScale: 0.8,
-                maxScale: 5,
-                child: Center(
-                  child: Image.file(
-                    File(widget.filePath),
-                    width: double.infinity,
-                    height: double.infinity,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => Text(
-                      '无法显示 ${widget.fileName}',
-                      style: const TextStyle(color: Colors.white),
+              child: Transform.translate(
+                offset: _dragOffset,
+                child: Transform.scale(
+                  // Shrinks a little while dragging, which reads as the image
+                  // receding towards the thumbnail it came from.
+                  scale: 0.75 + 0.25 * progress,
+                  child: InteractiveViewer(
+                    transformationController: _transformationController,
+                    minScale: 0.8,
+                    maxScale: 5,
+                    child: Center(
+                      child: Hero(
+                        tag: 'image:${widget.filePath}',
+                        child: Image.file(
+                          File(widget.filePath),
+                          width: double.infinity,
+                          height: double.infinity,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => Text(
+                            '无法显示 ${widget.fileName}',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
-          SafeArea(
-            child: Align(
-              alignment: Alignment.bottomRight,
-              child: Padding(
-                padding: const EdgeInsets.all(18),
-                child: Material(
-                  color: const Color(0xA32D2D30),
-                  shape: const CircleBorder(),
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: () => _saveImageToDevice(
-                      context,
-                      widget.filePath,
-                      widget.fileName,
-                    ),
-                    child: const SizedBox(
-                      width: 48,
-                      height: 48,
-                      child: Icon(
-                        Icons.file_download_outlined,
-                        size: 30,
-                        color: Colors.white,
-                        semanticLabel: '保存到相册',
+          // Fades out with the backdrop: a floating button over a
+          // half-dismissed image looks detached.
+          Opacity(
+            opacity: progress,
+            child: SafeArea(
+              child: Align(
+                alignment: Alignment.bottomRight,
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Material(
+                    color: const Color(0xA32D2D30),
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => _saveImageToDevice(
+                        context,
+                        widget.filePath,
+                        widget.fileName,
+                      ),
+                      child: const SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: Icon(
+                          Icons.file_download_outlined,
+                          size: 30,
+                          color: Colors.white,
+                          semanticLabel: '保存到相册',
+                        ),
                       ),
                     ),
                   ),
@@ -441,13 +484,16 @@ class _SendHereHomeState extends State<SendHereHome>
       }
       if (result.status == UpdateStatus.upToDate) {
         if (manual) {
-          await _showUpdateMessage('已是最新版本', 'SendHere build $sendHereBuildNumber 已是最新。');
+          await _showUpdateMessage(
+              '已是最新版本', 'SendHere build $sendHereBuildNumber 已是最新。');
         }
         return;
       }
       final update = result.update!;
       final prefs = await SharedPreferences.getInstance();
-      if (!manual && prefs.getInt(_skippedUpdateBuildKey) == update.build) return;
+      if (!manual && prefs.getInt(_skippedUpdateBuildKey) == update.build) {
+        return;
+      }
       if (!mounted) return;
       final action = await showDialog<String>(
         context: context,
@@ -845,8 +891,8 @@ class _SendHereHomeState extends State<SendHereHome>
   /// Falls back to the private copy if publishing fails.
   static Future<String> _publishToAndroidDownloads(File file) async {
     try {
-      final published = await _mobileFileChannel.invokeMethod<String>(
-          'publishToDownloads', {'path': file.path});
+      final published = await _mobileFileChannel
+          .invokeMethod<String>('publishToDownloads', {'path': file.path});
       return published ?? file.path;
     } on PlatformException catch (error) {
       developer.log('Publish to Downloads failed: ${error.message}',
@@ -1025,8 +1071,8 @@ class _SendHereHomeState extends State<SendHereHome>
   /// counterpart of [_reconnectTailscalePeers].
   void _startLanReconnect() {
     _lanReconnectTimer?.cancel();
-    _lanReconnectTimer = Timer.periodic(
-        const Duration(seconds: 8), (_) => _reconnectLanPeers());
+    _lanReconnectTimer =
+        Timer.periodic(const Duration(seconds: 8), (_) => _reconnectLanPeers());
   }
 
   void _reconnectLanPeers() {
@@ -1670,8 +1716,7 @@ class _SendHereHomeState extends State<SendHereHome>
                     icon: Icons.add,
                     tooltip: '连接此手机',
                     onTap: () async => _showMobileConnectQr(),
-                    filled: false,
-                    size: 38,
+                    size: 34,
                   ),
                 ),
               ]
@@ -1896,8 +1941,7 @@ class _RemoteAddProgress extends StatelessWidget {
               height: 2,
               // Sits level with the centre of the 16 pt markers.
               margin: const EdgeInsets.fromLTRB(4, 7, 4, 0),
-              color:
-                  completed ? SendHereColors.brand : SendHereColors.line,
+              color: completed ? SendHereColors.brand : SendHereColors.line,
             ),
           );
         }
@@ -1912,8 +1956,7 @@ class _RemoteAddProgress extends StatelessWidget {
             width: 16,
             height: 16,
             child: current && !isLast
-                ? CircularProgressIndicator(
-                    strokeWidth: 1.8, color: accent)
+                ? CircularProgressIndicator(strokeWidth: 1.8, color: accent)
                 : Icon(
                     reached ? Icons.check_circle : Icons.circle_outlined,
                     size: 16,
@@ -2079,85 +2122,86 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
           color: mobile ? SendHereColors.card : SendHereColors.paper,
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          // Desktop only: the phone already names the screen in its app bar
-          // ("SendHere") and puts the ＋ there, so repeating a 设备列表 heading
-          // inside the list would be a second title for the same screen.
-          if (!mobile)
-            Padding(
-              // 36 at the top keeps the macOS traffic lights, which float over
-              // the content, clear of the title and the ＋.
-              padding: const EdgeInsets.fromLTRB(14, 36, 10, 8),
-              child: Row(children: [
-                const Expanded(
-                  child: Text('设备列表',
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-                _AddDeviceButton(
-                  active: widget.phoneQrExpanded || widget.remoteAddExpanded,
-                  connectPhone: widget.connectPhone,
-                  addRemoteDevice: widget.addRemoteDevice,
-                ),
-              ]),
-            ),
-          if (mobile &&
-              widget.notificationPermission != null &&
-              widget.notificationPermission != 'authorized' &&
-              widget.notificationPermission != 'provisional')
-            _NotificationPermissionBanner(
-              permission: widget.notificationPermission!,
-              requestPermission: widget.requestNotificationPermission,
-              openSettings: widget.openNotificationSettings,
-            ),
-          Expanded(
-            child: widget.connectedPeers.isEmpty
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('暂无设备\n附近电脑会自动显示在这里',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: SendHereColors.sub)),
-                    ),
-                  )
-                : ListView.separated(
-                    // Desktop insets the rounded rows from the sidebar edges.
-                    padding: mobile
-                        ? EdgeInsets.zero
-                        : const EdgeInsets.symmetric(horizontal: 8),
-                    itemCount: peers.length,
-                    itemBuilder: (context, index) {
-                      final device = peers[index];
-                      return _DeviceTile(
-                        device: device,
-                        unreadCount: widget.unreadCounts[device.id] ?? 0,
-                        selected: !mobile && widget.selectedPeerId == device.id,
-                        select: (id) {
-                          _collapseActions();
-                          widget.selectPeer(id);
-                        },
-                        deleteConversation: widget.deleteConversation,
-                        revealed: _revealedDeviceId == device.id,
-                        reveal: () =>
-                            setState(() => _revealedDeviceId = device.id),
-                        collapse: _collapseActions,
-                        connecting:
-                            widget.connectingPeerIds.contains(device.id),
-                      );
-                    },
-                    separatorBuilder: (_, __) => mobile
-                        // Starts where the name does, so the divider never
-                        // cuts under an avatar.
-                        // 16 padding + 44 avatar + 10 gap: starts exactly where
-                        // the device name does.
-                        ? const Divider(
-                            height: 0.5,
-                            thickness: 0.5,
-                            indent: 70,
-                            endIndent: 0,
-                            color: SendHereColors.line,
-                          )
-                        : const SizedBox(height: 1),
+            // Desktop only: the phone already names the screen in its app bar
+            // ("SendHere") and puts the ＋ there, so repeating a 设备列表 heading
+            // inside the list would be a second title for the same screen.
+            if (!mobile)
+              Padding(
+                // 36 at the top keeps the macOS traffic lights, which float over
+                // the content, clear of the title and the ＋.
+                padding: const EdgeInsets.fromLTRB(14, 36, 10, 8),
+                child: Row(children: [
+                  const Expanded(
+                    child: Text('设备列表',
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
                   ),
+                  _AddDeviceButton(
+                    active: widget.phoneQrExpanded || widget.remoteAddExpanded,
+                    connectPhone: widget.connectPhone,
+                    addRemoteDevice: widget.addRemoteDevice,
+                  ),
+                ]),
+              ),
+            if (mobile &&
+                widget.notificationPermission != null &&
+                widget.notificationPermission != 'authorized' &&
+                widget.notificationPermission != 'provisional')
+              _NotificationPermissionBanner(
+                permission: widget.notificationPermission!,
+                requestPermission: widget.requestNotificationPermission,
+                openSettings: widget.openNotificationSettings,
+              ),
+            Expanded(
+              child: widget.connectedPeers.isEmpty
+                  ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text('暂无设备\n附近电脑会自动显示在这里',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: SendHereColors.sub)),
+                      ),
+                    )
+                  : ListView.separated(
+                      // Desktop insets the rounded rows from the sidebar edges.
+                      padding: mobile
+                          ? EdgeInsets.zero
+                          : const EdgeInsets.symmetric(horizontal: 8),
+                      itemCount: peers.length,
+                      itemBuilder: (context, index) {
+                        final device = peers[index];
+                        return _DeviceTile(
+                          device: device,
+                          unreadCount: widget.unreadCounts[device.id] ?? 0,
+                          selected:
+                              !mobile && widget.selectedPeerId == device.id,
+                          select: (id) {
+                            _collapseActions();
+                            widget.selectPeer(id);
+                          },
+                          deleteConversation: widget.deleteConversation,
+                          revealed: _revealedDeviceId == device.id,
+                          reveal: () =>
+                              setState(() => _revealedDeviceId = device.id),
+                          collapse: _collapseActions,
+                          connecting:
+                              widget.connectingPeerIds.contains(device.id),
+                        );
+                      },
+                      separatorBuilder: (_, __) => mobile
+                          // Starts where the name does, so the divider never
+                          // cuts under an avatar.
+                          // 16 padding + 44 avatar + 10 gap: starts exactly where
+                          // the device name does.
+                          ? const Divider(
+                              height: 0.5,
+                              thickness: 0.5,
+                              indent: 70,
+                              endIndent: 0,
+                              color: SendHereColors.line,
+                            )
+                          : const SizedBox(height: 1),
+                    ),
             ),
           ]),
         ),
@@ -2259,8 +2303,7 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
           const SizedBox(height: 6),
           Row(children: [
             const Text('本机',
-                style:
-                    TextStyle(fontSize: 11, color: SendHereColors.sub)),
+                style: TextStyle(fontSize: 11, color: SendHereColors.sub)),
             const SizedBox(width: 6),
             Expanded(
               child: SelectableText(address,
@@ -2306,8 +2349,8 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
           child: _stage == null
               ? const Center(
                   child: Text('先探测对方是否可达，再建立连接',
-                      style: TextStyle(
-                          fontSize: 10.5, color: SendHereColors.sub)),
+                      style:
+                          TextStyle(fontSize: 10.5, color: SendHereColors.sub)),
                 )
               : _RemoteAddProgress(stage: _stage!),
         ),
@@ -2408,8 +2451,7 @@ class _SidebarPanel extends StatelessWidget {
                 icon: const Icon(Icons.close, size: 15),
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints(minWidth: 24, minHeight: 24),
+                constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
                 onPressed: onClose,
               ),
             ]),
@@ -2577,9 +2619,8 @@ class _UnreadBadge extends StatelessWidget {
         decoration: BoxDecoration(
           color: SendHereColors.unread,
           borderRadius: BorderRadius.circular(height / 2),
-          border: compact
-              ? Border.all(color: SendHereColors.card, width: 2)
-              : null,
+          border:
+              compact ? Border.all(color: SendHereColors.card, width: 2) : null,
         ),
         child: Center(
           child: Text(
@@ -2644,8 +2685,8 @@ class _DeviceAvatar extends StatelessWidget {
                 top: 1,
                 right: 1,
                 child: Container(
-                  width: 12,
-                  height: 12,
+                  width: 11,
+                  height: 11,
                   decoration: BoxDecoration(
                     color: SendHereColors.online,
                     shape: BoxShape.circle,
@@ -2745,8 +2786,7 @@ class _DeviceTile extends StatelessWidget {
                 fontSize: desktop ? 12.5 : 16, fontWeight: FontWeight.w500)),
         subtitle: Text(statusLabel,
             style: TextStyle(
-                fontSize: desktop ? 10.5 : 12.5,
-                color: SendHereColors.sub)),
+                fontSize: desktop ? 10.5 : 12.5, color: SendHereColors.sub)),
         // No trailing status icon: a green dot on the avatar marks an online
         // device, and an offline one needs no badge of its own — the greyed
         // avatar and the "X前在线" subtitle already say so.
@@ -2767,15 +2807,13 @@ class _DeviceTile extends StatelessWidget {
           child: ListTile(
             minVerticalPadding: 7,
             // Mirrors [tile] so the text does not shift while sliding.
-            contentPadding:
-                EdgeInsets.symmetric(horizontal: desktop ? 8 : 16),
+            contentPadding: EdgeInsets.symmetric(horizontal: desktop ? 8 : 16),
             title: Text(
               device.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  fontSize: desktop ? 12.5 : 16,
-                  fontWeight: FontWeight.w500),
+                  fontSize: desktop ? 12.5 : 16, fontWeight: FontWeight.w500),
             ),
             subtitle: Text(statusLabel,
                 style: TextStyle(
@@ -3140,8 +3178,7 @@ class _NetworkTab extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                color:
-                    selected ? SendHereColors.brandText : SendHereColors.sub,
+                color: selected ? SendHereColors.brandText : SendHereColors.sub,
               ),
             ),
           ),
@@ -3179,24 +3216,34 @@ class _MobileConversationTitle extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 7),
-        // Unlike the list, a conversation shows one device only, so its
-        // offline state has to stay visible here — otherwise there is nothing
-        // to explain why a message will not send. Both states use the same dot
-        // so it reads as one indicator changing colour.
-        Tooltip(
-          message: online ? '在线' : '离线',
-          child: Container(
-            width: 9,
-            height: 9,
-            decoration: BoxDecoration(
-              color: online ? SendHereColors.online : SendHereColors.line,
-              shape: BoxShape.circle,
-              border: online
-                  ? null
-                  : Border.all(color: SendHereColors.sub, width: 1),
+        // Online is a quiet dot, but offline gets a worded chip: this screen
+        // shows one device only, and a grey dot gave no hint as to why a
+        // message would not send.
+        if (online)
+          Tooltip(
+            message: '在线',
+            child: Container(
+              width: 9,
+              height: 9,
+              decoration: const BoxDecoration(
+                color: SendHereColors.online,
+                shape: BoxShape.circle,
+              ),
             ),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: SendHereColors.chip,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: const Text('离线',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: SendHereColors.sub)),
           ),
-        ),
       ],
     );
   }
@@ -3230,7 +3277,8 @@ class _ConversationHeader extends StatelessWidget {
           child: Text(name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              style:
+                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
         ),
         if (viaTailscale)
           Tooltip(
@@ -3251,8 +3299,9 @@ class _ConversationHeader extends StatelessWidget {
                 Text('通过 Tailscale 连接',
                     style: TextStyle(
                         fontSize: 11,
-                        color:
-                            Theme.of(context).colorScheme.onSecondaryContainer)),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSecondaryContainer)),
               ]),
             ),
           ),
@@ -3449,17 +3498,15 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // 38 rather than the field's 42: an outlined button at the same
-            // size as the solid send key looked oversized and empty. The 2 pt
-            // bottom inset centres it against the taller neighbours.
+            // 34, matching the app bar's ＋. The 4 pt inset centres it against
+            // the taller field and send key.
             Padding(
-              padding: const EdgeInsets.only(bottom: 2),
+              padding: const EdgeInsets.only(bottom: 4),
               child: _ComposerIconButton(
                 icon: Icons.add,
                 tooltip: '添加附件',
                 onTap: widget.offerFiles,
-                size: 38,
-                filled: false,
+                size: 34,
               ),
             ),
             const SizedBox(width: 10),
@@ -3664,13 +3711,14 @@ class _ComposerIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Tooltip(
         message: tooltip,
+        // Scheme C: a filled chip circle with no outline, so there is no ring
+        // in one colour around a glyph in another. The fill matches the
+        // composer field, which keeps the solid send key as the only accent in
+        // that row. Desktop stays transparent until hover, since it sits
+        // inside the bordered composer box.
         child: Material(
           color: filled ? SendHereColors.chip : Colors.transparent,
-          shape: const CircleBorder(
-            // The outline and the glyph share one colour, so the control reads
-            // as a single mark rather than a grey ring around a black plus.
-            side: BorderSide(color: SendHereColors.sub, width: 1.5),
-          ),
+          shape: const CircleBorder(),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             customBorder: const CircleBorder(),
@@ -3679,8 +3727,7 @@ class _ComposerIconButton extends StatelessWidget {
             child: SizedBox(
               width: size,
               height: size,
-              child: Icon(icon,
-                  size: size * 0.48, color: SendHereColors.sub),
+              child: Icon(icon, size: size * 0.5, color: SendHereColors.ink),
             ),
           ),
         ),
@@ -3760,77 +3807,93 @@ class _MessageBubble extends StatelessWidget {
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  // A finished image fills the bubble edge to edge: the usual
+                  // 12 pt inset turned the bubble colour into a thick frame
+                  // around the picture. One still uploading keeps the inset,
+                  // since its progress bar sits inside the same bubble.
+                  padding: image &&
+                          event.localPath != null &&
+                          !(sent &&
+                              event.transferId != null &&
+                              event.fileStatus != FileTransferStatus.completed)
+                      ? EdgeInsets.zero
+                      : const EdgeInsets.all(12),
                   child: file
-                    ? Column(mainAxisSize: MainAxisSize.min, children: [
-                        InkWell(
-                          // Without an explicit shape the ink highlight is
-                          // painted on the nearest Material, which sits above
-                          // the conversation header, so hovering an image used
-                          // to bleed a rectangle over the title row.
-                          borderRadius: BorderRadius.circular(
-                              image ? SendHereRadius.thumb : 6),
-                          onTap: event.localPath == null
-                              ? null
-                              : image
-                                  ? () => _showImagePreview(
-                                        context,
-                                        event.localPath!,
-                                        event.fileName ?? '图片',
-                                      )
-                                  : () => _openReceivedFile(
-                                        context,
-                                        event.localPath!,
-                                      ),
-                          onLongPress: event.localPath == null || !image
-                              ? null
-                              : () => _showImageActions(
-                                    context,
-                                    event.localPath!,
-                                    event.fileName ?? '图片',
-                                  ),
-                          onSecondaryTapDown: event.localPath == null || !image
-                              ? null
-                              : (details) => _showImageActions(
-                                    context,
-                                    event.localPath!,
-                                    event.fileName ?? '图片',
-                                    position: details.globalPosition,
-                                  ),
-                          child: image && event.localPath != null
-                              ? ConstrainedBox(
-                                  constraints:
-                                      const BoxConstraints(maxWidth: 360),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Image.file(File(event.localPath!),
-                                        height: 180,
-                                        fit: BoxFit.contain,
-                                        errorBuilder: (_, __, ___) =>
-                                            _FileLabel(name: event.fileName)),
-                                  ),
-                                )
-                              : _FileLabel(name: event.fileName),
-                        ),
-                        if (sent &&
-                            event.transferId != null &&
-                            event.fileStatus !=
-                                FileTransferStatus.completed) ...[
-                          const SizedBox(height: 10),
-                          _TransferProgress(
-                            event: event,
-                            retry: event.fileStatus == FileTransferStatus.failed
-                                ? () => retryOutboxItem(event.transferId!)
-                                : null,
-                            cancel: event.fileStatus ==
-                                        FileTransferStatus.waiting ||
-                                    event.fileStatus ==
-                                        FileTransferStatus.failed
-                                ? () => cancelOutboxItem(event.transferId!)
-                                : null,
+                      ? Column(mainAxisSize: MainAxisSize.min, children: [
+                          InkWell(
+                            // Without an explicit shape the ink highlight is
+                            // painted on the nearest Material, which sits above
+                            // the conversation header, so hovering an image used
+                            // to bleed a rectangle over the title row.
+                            borderRadius: BorderRadius.circular(
+                                image ? SendHereRadius.thumb : 6),
+                            onTap: event.localPath == null
+                                ? null
+                                : image
+                                    ? () => _showImagePreview(
+                                          context,
+                                          event.localPath!,
+                                          event.fileName ?? '图片',
+                                        )
+                                    : () => _openReceivedFile(
+                                          context,
+                                          event.localPath!,
+                                        ),
+                            onLongPress: event.localPath == null || !image
+                                ? null
+                                : () => _showImageActions(
+                                      context,
+                                      event.localPath!,
+                                      event.fileName ?? '图片',
+                                    ),
+                            onSecondaryTapDown:
+                                event.localPath == null || !image
+                                    ? null
+                                    : (details) => _showImageActions(
+                                          context,
+                                          event.localPath!,
+                                          event.fileName ?? '图片',
+                                          position: details.globalPosition,
+                                        ),
+                            child: image && event.localPath != null
+                                ? ConstrainedBox(
+                                    constraints:
+                                        const BoxConstraints(maxWidth: 360),
+                                    // Tagged so opening the preview grows this
+                                    // thumbnail into the full-screen image and
+                                    // shrinks it back on dismiss. The bubble's
+                                    // own clip rounds the corners.
+                                    child: Hero(
+                                      tag: 'image:${event.localPath!}',
+                                      child: Image.file(File(event.localPath!),
+                                          height: 180,
+                                          fit: BoxFit.contain,
+                                          errorBuilder: (_, __, ___) =>
+                                              _FileLabel(name: event.fileName)),
+                                    ),
+                                  )
+                                : _FileLabel(name: event.fileName),
                           ),
-                        ],
-                      ])
+                          if (sent &&
+                              event.transferId != null &&
+                              event.fileStatus !=
+                                  FileTransferStatus.completed) ...[
+                            const SizedBox(height: 10),
+                            _TransferProgress(
+                              event: event,
+                              retry:
+                                  event.fileStatus == FileTransferStatus.failed
+                                      ? () => retryOutboxItem(event.transferId!)
+                                      : null,
+                              cancel: event.fileStatus ==
+                                          FileTransferStatus.waiting ||
+                                      event.fileStatus ==
+                                          FileTransferStatus.failed
+                                  ? () => cancelOutboxItem(event.transferId!)
+                                  : null,
+                            ),
+                          ],
+                        ])
                       : MessageText(event.text ?? ''),
                 ),
               ),

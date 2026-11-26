@@ -1067,6 +1067,7 @@ class _SendHereHomeState extends State<SendHereHome>
     String host,
     int port, {
     ValueChanged<_RemoteAddStage>? onStageChanged,
+    ValueChanged<String>? onPeerFound,
   }) async {
     final server = _server;
     final localDeviceId = _nearby.deviceId;
@@ -1091,6 +1092,9 @@ class _SendHereHomeState extends State<SendHereHome>
       return '连不上 $address:$port，请确认对方已打开 SendHere 且 Tailscale 在线';
     }
     if (peer.id == localDeviceId) return '这是本机';
+    // Surfacing the probed name is what makes the button's "测试" half visible:
+    // the user sees which machine answered, not just an abstract tick.
+    onPeerFound?.call(peer.name);
     onStageChanged?.call(_RemoteAddStage.found);
     // Older builds don't report their ID; fall back to an address-based key.
     final deviceId = peer.id ?? 'tailscale:$address';
@@ -1729,11 +1733,12 @@ class _SendHereHomeState extends State<SendHereHome>
                                 ? _RemoteAddCard(
                                     localTailscaleAddress: _tailscaleAddress,
                                     addRemoteDevice: (input,
-                                            {onStageChanged}) {
+                                        {onStageChanged, onPeerFound}) {
                                       final parsed = _parseHostPort(input);
                                       return _addRemoteDevice(
                                           parsed.$1, parsed.$2,
-                                          onStageChanged: onStageChanged);
+                                          onStageChanged: onStageChanged,
+                                          onPeerFound: onPeerFound);
                                     },
                                     onClose: _hideRemoteAddPanel,
                                   )
@@ -2096,6 +2101,7 @@ class _RemoteAddCard extends StatefulWidget {
   final Future<String?> Function(
     String input, {
     ValueChanged<_RemoteAddStage>? onStageChanged,
+    ValueChanged<String>? onPeerFound,
   }) addRemoteDevice;
   final VoidCallback onClose;
 
@@ -2109,6 +2115,9 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
   bool _busy = false;
   _RemoteAddStage? _stage;
 
+  /// The name reported by the machine that answered the probe.
+  String? _peerName;
+
   @override
   void dispose() {
     _controller.dispose();
@@ -2121,12 +2130,16 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
     setState(() {
       _busy = true;
       _error = null;
+      _peerName = null;
       _stage = _RemoteAddStage.resolving;
     });
     final failure = await widget.addRemoteDevice(
       input,
       onStageChanged: (stage) {
         if (mounted) setState(() => _stage = stage);
+      },
+      onPeerFound: (name) {
+        if (mounted) setState(() => _peerName = name);
       },
     );
     if (!mounted) return;
@@ -2141,6 +2154,7 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
       _busy = false;
       _error = failure;
       _stage = null;
+      _peerName = null;
     });
   }
 
@@ -2209,13 +2223,29 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
           height: 34,
           child: _stage == null
               ? const Center(
-                  child: Text('输入地址后按回车或点"添加"',
+                  child: Text('先探测对方是否可达，再建立连接',
                       style: TextStyle(
                           fontSize: 10.5, color: SendHereColors.sub)),
                 )
               : _RemoteAddProgress(stage: _stage!),
         ),
-        const SizedBox(height: 12),
+        // The probed machine's name: proof of what the "测试" half of the
+        // button actually reached.
+        SizedBox(
+          height: 18,
+          child: _peerName == null
+              ? null
+              : Center(
+                  child: Text(_peerName!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: SendHereColors.online)),
+                ),
+        ),
+        const SizedBox(height: 6),
         Row(mainAxisAlignment: MainAxisAlignment.end, children: [
           TextButton(
             onPressed: _busy ? null : widget.onClose,
@@ -2229,13 +2259,20 @@ class _RemoteAddCardState extends State<_RemoteAddCard> {
           FilledButton(
             onPressed: _busy ? null : _submit,
             style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(9)),
               textStyle:
                   const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
-            child: const Text('添加'),
+            child: _busy
+                ? const SizedBox(
+                    width: 13,
+                    height: 13,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.8, color: SendHereColors.onBrand),
+                  )
+                : const Text('测试并连接'),
           ),
         ]),
       ],

@@ -594,13 +594,25 @@ class _SendHereHomeState extends State<SendHereHome>
   Future<void> _restartAfterForeground() async {
     if (_restartingForForeground) return;
     final server = _server;
-    if (server != null && server.isRunning) return;
     _restartingForForeground = true;
     try {
-      await _startServer();
+      if (server == null || !server.isRunning) {
+        await _startServer();
+        return;
+      }
+      // The server survived the background, so only the LAN discovery that
+      // _startServer paused needs to come back. Re-subscribing here keeps the
+      // computer list populated without rebuilding the QR token or web sessions.
+      await _subscribeNearbyDiscovery(server.port);
     } finally {
       _restartingForForeground = false;
     }
+  }
+
+  Future<void> _subscribeNearbyDiscovery(int port) async {
+    await _nearbySubscription?.cancel();
+    await _nearby.start(port: port);
+    _nearbySubscription = _nearby.devices.listen(_syncNearbyDevices);
   }
 
   Future<void> _loadInitialState() async {

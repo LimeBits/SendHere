@@ -35,6 +35,11 @@ class NearbyDeviceService {
 
   Stream<List<NearbyDevice>> get devices => _devices.stream;
 
+  /// The endpoint currently advertised for [deviceId], or null when the
+  /// service is no longer visible. Lets callers redial a known device without
+  /// waiting for the next change event on [devices].
+  NearbyDevice? endpointFor(String deviceId) => _known[deviceId];
+
   Future<void> start({required int port}) async {
     await pause();
     final preferences = await SharedPreferences.getInstance();

@@ -362,6 +362,7 @@ class _SendHereHomeState extends State<SendHereHome>
   StreamSubscription<TransferEvent>? _subscription;
   StreamSubscription<List<NearbyDevice>>? _nearbySubscription;
   Timer? _tailscaleReconnectTimer;
+  Timer? _lanReconnectTimer;
   final _connectingPeerIds = <String>{};
   final _discoveredComputerIds = <String>{};
   String? _address;
@@ -609,6 +610,14 @@ class _SendHereHomeState extends State<SendHereHome>
       // _startServer paused needs to come back. Re-subscribing here keeps the
       // computer list populated without rebuilding the QR token or web sessions.
       await _subscribeNearbyDiscovery(server.port);
+      // iOS tears down sockets while suspended, so sweep immediately instead
+      // of waiting out the periodic interval.
+      _reconnectLanPeers();
+      unawaited(_reconnectTailscalePeers());
+    } catch (error) {
+      // Nothing here may escape: this runs from an unawaited lifecycle
+      // callback, where an async error would reach the top level.
+      debugPrint('SendHere: foreground restart failed: $error');
     } finally {
       _restartingForForeground = false;
     }
@@ -616,7 +625,16 @@ class _SendHereHomeState extends State<SendHereHome>
 
   Future<void> _subscribeNearbyDiscovery(int port) async {
     await _nearbySubscription?.cancel();
-    await _nearby.start(port: port);
+    try {
+      await _nearby.start(port: port);
+    } catch (error) {
+      // Bonjour can refuse to register or browse (permissions revoked, the
+      // port still held after a background kill). Transfers over a known
+      // address and the Tailscale path both still work, so losing discovery
+      // must not take the app down with an unhandled async error.
+      debugPrint('SendHere: mDNS discovery unavailable: $error');
+      return;
+    }
     _nearbySubscription = _nearby.devices.listen(_syncNearbyDevices);
   }
 
@@ -790,6 +808,7 @@ class _SendHereHomeState extends State<SendHereHome>
           _error = null;
         });
         _startTailscaleReconnect();
+        _startLanReconnect();
         if (addresses.isEmpty &&
             tailscale.isEmpty &&
             (Platform.isIOS || Platform.isAndroid)) {
@@ -995,6 +1014,41 @@ class _SendHereHomeState extends State<SendHereHome>
     unawaited(_reconnectTailscalePeers());
     _tailscaleReconnectTimer = Timer.periodic(
         const Duration(seconds: 20), (_) => _reconnectTailscalePeers());
+  }
+
+  /// Redials computers that mDNS can still see but whose peer socket is gone.
+  ///
+  /// LAN connections used to be driven purely by mDNS change events, so a
+  /// socket dropped while the app was backgrounded stayed dropped until the
+  /// service list happened to change again. The device then sat at "离线" even
+  /// though the computer was up the whole time. This sweep is the LAN
+  /// counterpart of [_reconnectTailscalePeers].
+  void _startLanReconnect() {
+    _lanReconnectTimer?.cancel();
+    _lanReconnectTimer = Timer.periodic(
+        const Duration(seconds: 8), (_) => _reconnectLanPeers());
+  }
+
+  void _reconnectLanPeers() {
+    final server = _server;
+    final localDeviceId = _nearby.deviceId;
+    if (!mounted || server == null || localDeviceId == null) return;
+    for (final id in _discoveredComputerIds) {
+      if (server.hasPeer(id) ||
+          server.hasDevice(id) ||
+          _connectingPeerIds.contains(id)) {
+        continue;
+      }
+      // Only devices mDNS still advertises are swept here; anything it has
+      // withdrawn is either genuinely gone or handled by the Tailscale timer.
+      final endpoint = _nearby.endpointFor(id);
+      if (endpoint == null) continue;
+      // Deliberately ignores the compareTo tie-break used on first discovery.
+      // That rule assumes both sides see the same mDNS event; after a
+      // background/foreground cycle only this side knows its socket died, and
+      // waiting for the peer to notice is what left the pair stuck.
+      unawaited(_connectPeer(endpoint));
+    }
   }
 
   Future<void> _reconnectTailscalePeers() async {
@@ -1561,6 +1615,7 @@ class _SendHereHomeState extends State<SendHereHome>
     _updateChannel.setMethodCallHandler(null);
     _updateTimer?.cancel();
     _tailscaleReconnectTimer?.cancel();
+    _lanReconnectTimer?.cancel();
     _subscription?.cancel();
     _nearbySubscription?.cancel();
     _nearby.dispose();
@@ -1616,7 +1671,7 @@ class _SendHereHomeState extends State<SendHereHome>
                     tooltip: '连接此手机',
                     onTap: () async => _showMobileConnectQr(),
                     filled: false,
-                    size: 36,
+                    size: 38,
                   ),
                 ),
               ]
@@ -2092,10 +2147,12 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                     separatorBuilder: (_, __) => mobile
                         // Starts where the name does, so the divider never
                         // cuts under an avatar.
+                        // 16 padding + 44 avatar + 10 gap: starts exactly where
+                        // the device name does.
                         ? const Divider(
                             height: 0.5,
                             thickness: 0.5,
-                            indent: 64,
+                            indent: 70,
                             endIndent: 0,
                             color: SendHereColors.line,
                           )
@@ -2545,11 +2602,15 @@ class _DeviceAvatar extends StatelessWidget {
     required this.phone,
     required this.online,
     required this.unreadCount,
+    this.ringColor = SendHereColors.card,
   });
 
   final bool phone;
   final bool online;
   final int unreadCount;
+
+  /// The row colour behind the avatar, used for the online dot's ring.
+  final Color ringColor;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -2568,11 +2629,31 @@ class _DeviceAvatar extends StatelessWidget {
                     online ? SendHereColors.brandText : const Color(0xFF9A9AA0),
               ),
             ),
+            // Online state rides on the avatar instead of a separate trailing
+            // icon, so "which device" and "is it reachable" read as one thing.
+            // An unread badge takes the same corner and wins: the count
+            // already implies the device was reachable.
             if (unreadCount > 0)
               Positioned(
                 top: -2,
                 right: -3,
                 child: _UnreadBadge(count: unreadCount, compact: true),
+              )
+            else if (online)
+              Positioned(
+                top: 1,
+                right: 1,
+                child: Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: SendHereColors.online,
+                    shape: BoxShape.circle,
+                    // A ring in the row colour keeps the dot legible where it
+                    // overlaps the avatar fill.
+                    border: Border.all(color: ringColor, width: 2),
+                  ),
+                ),
               ),
           ],
         ),
@@ -2641,36 +2722,34 @@ class _DeviceTile extends StatelessWidget {
             ? const RoundedRectangleBorder(
                 borderRadius: BorderRadius.all(Radius.circular(10)))
             : null,
-        // Mobile pushes the avatar and the status icon out towards the screen
-        // edges; ListTile's default 16 left both floating well inside.
-        contentPadding: EdgeInsets.symmetric(horizontal: desktop ? 8 : 10),
+        // Mobile uses 16 so the avatar's left edge lines up with the
+        // "SendHere" title above it, and the status icon's right edge mirrors
+        // it against the ＋ in the app bar.
+        contentPadding: EdgeInsets.symmetric(horizontal: desktop ? 8 : 16),
         horizontalTitleGap: desktop ? 9 : 10,
         leading: _DeviceAvatar(
           phone: phone,
           online: device.online,
           unreadCount: unreadCount,
+          ringColor: selected
+              ? SendHereColors.brandSoft
+              : desktop
+                  ? SendHereColors.paper
+                  : SendHereColors.card,
         ),
         minVerticalPadding: desktop ? 6 : 7,
         title: Text(device.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-                fontSize: desktop ? 12.5 : 14, fontWeight: FontWeight.w500)),
+                fontSize: desktop ? 12.5 : 16, fontWeight: FontWeight.w500)),
         subtitle: Text(statusLabel,
-            style: TextStyle(fontSize: desktop ? 10.5 : 12)),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            device.online
-                ? const Icon(Icons.circle,
-                    size: 10, color: SendHereColors.online)
-                : const Icon(
-                    Icons.cloud_off_outlined,
-                    size: 16,
-                    color: SendHereColors.sub,
-                  ),
-          ],
-        ),
+            style: TextStyle(
+                fontSize: desktop ? 10.5 : 12.5,
+                color: SendHereColors.sub)),
+        // No trailing status icon: a green dot on the avatar marks an online
+        // device, and an offline one needs no badge of its own — the greyed
+        // avatar and the "X前在线" subtitle already say so.
         onTap: () => select(device.id),
       ),
     );
@@ -2687,13 +2766,21 @@ class _DeviceTile extends StatelessWidget {
           color: desktop ? SendHereColors.paper : SendHereColors.card,
           child: ListTile(
             minVerticalPadding: 7,
+            // Mirrors [tile] so the text does not shift while sliding.
+            contentPadding:
+                EdgeInsets.symmetric(horizontal: desktop ? 8 : 16),
             title: Text(
               device.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              style: TextStyle(
+                  fontSize: desktop ? 12.5 : 16,
+                  fontWeight: FontWeight.w500),
             ),
-            subtitle: Text(statusLabel, style: const TextStyle(fontSize: 12)),
+            subtitle: Text(statusLabel,
+                style: TextStyle(
+                    fontSize: desktop ? 10.5 : 12.5,
+                    color: SendHereColors.sub)),
           ),
         ),
         child: tile,
@@ -3092,12 +3179,22 @@ class _MobileConversationTitle extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 7),
+        // Unlike the list, a conversation shows one device only, so its
+        // offline state has to stay visible here — otherwise there is nothing
+        // to explain why a message will not send. Both states use the same dot
+        // so it reads as one indicator changing colour.
         Tooltip(
           message: online ? '在线' : '离线',
-          child: Icon(
-            online ? Icons.circle : Icons.cloud_off_outlined,
-            size: online ? 9 : 17,
-            color: online ? SendHereColors.online : SendHereColors.sub,
+          child: Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: online ? SendHereColors.online : SendHereColors.line,
+              shape: BoxShape.circle,
+              border: online
+                  ? null
+                  : Border.all(color: SendHereColors.sub, width: 1),
+            ),
           ),
         ),
       ],
@@ -3352,14 +3449,18 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            _ComposerIconButton(
-              icon: Icons.add,
-              tooltip: '添加附件',
-              onTap: widget.offerFiles,
-              // Same 42 as the field and the send key, so the row is one band
-              // of equal-height controls.
-              size: 42,
-              filled: false,
+            // 38 rather than the field's 42: an outlined button at the same
+            // size as the solid send key looked oversized and empty. The 2 pt
+            // bottom inset centres it against the taller neighbours.
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: _ComposerIconButton(
+                icon: Icons.add,
+                tooltip: '添加附件',
+                onTap: widget.offerFiles,
+                size: 38,
+                filled: false,
+              ),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -3566,9 +3667,9 @@ class _ComposerIconButton extends StatelessWidget {
         child: Material(
           color: filled ? SendHereColors.chip : Colors.transparent,
           shape: const CircleBorder(
-            // Darker than the hairline used for dividers: at 42 pt a 0xEB
-            // outline all but disappears.
-            side: BorderSide(color: Color(0xFFD6D6DA)),
+            // The outline and the glyph share one colour, so the control reads
+            // as a single mark rather than a grey ring around a black plus.
+            side: BorderSide(color: SendHereColors.sub, width: 1.5),
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -3578,7 +3679,8 @@ class _ComposerIconButton extends StatelessWidget {
             child: SizedBox(
               width: size,
               height: size,
-              child: Icon(icon, size: size * 0.58, color: SendHereColors.ink),
+              child: Icon(icon,
+                  size: size * 0.48, color: SendHereColors.sub),
             ),
           ),
         ),

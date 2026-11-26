@@ -333,7 +333,10 @@ class MainFlutterWindow: NSWindow {
     self.titleVisibility = .hidden
     self.titlebarAppearsTransparent = true
     self.styleMask.insert(.fullSizeContentView)
-    self.isMovableByWindowBackground = true
+    // Deliberately NOT isMovableByWindowBackground: dragging the background
+    // swallows the mouse-down that the native NSTextView needs, which leaves
+    // the composer unclickable.
+    self.isMovableByWindowBackground = false
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 

@@ -324,6 +324,7 @@ class MainFlutterWindow: NSWindow {
     let windowFrame = self.frame
     self.contentViewController = containerController
     self.setFrame(windowFrame, display: true)
+    self.title = "SendHere"
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 

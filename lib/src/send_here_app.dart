@@ -1072,7 +1072,7 @@ class _SendHereHomeState extends State<SendHereHome>
                 _tailscaleAddress == null
                     ? '本机未检测到 Tailscale 地址，请先打开 Tailscale。'
                     : '在对方电脑上打开 SendHere，然后输入它的 Tailscale 地址或主机名。本机：$_tailscaleAddress',
-                style: const TextStyle(fontSize: 13, color: Colors.black54),
+                style: const TextStyle(fontSize: 13, color: SendHereColors.sub),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -1555,7 +1555,7 @@ class _SendHereHomeState extends State<SendHereHome>
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.black12),
+                border: Border.all(color: SendHereColors.line),
               ),
               child: QrImageView(data: url, size: 220),
             ),
@@ -2027,7 +2027,7 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                       padding: EdgeInsets.all(24),
                       child: Text('暂无设备\n附近电脑会自动显示在这里',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.black54)),
+                          style: TextStyle(color: SendHereColors.sub)),
                     ),
                   )
                 : ListView.separated(
@@ -2592,7 +2592,7 @@ class _PhoneConnectCard extends StatelessWidget {
                   ? '手机需开启 Tailscale，用系统相机扫一扫，不在同一 Wi‑Fi 也能传。'
                   : '用系统相机或微信扫一扫，无需安装 App。',
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              style: const TextStyle(fontSize: 12, color: SendHereColors.sub)),
           if (networkToggle != null) ...[
             const SizedBox(height: 8),
             networkToggle!,
@@ -2603,7 +2603,7 @@ class _PhoneConnectCard extends StatelessWidget {
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.black12),
+              border: Border.all(color: SendHereColors.line),
             ),
             child: QrImageView(data: url, size: 132),
           ),
@@ -2881,6 +2881,38 @@ class _ConversationPanelState extends State<_ConversationPanel> {
     _nativeFieldKey.currentState?.clear();
   }
 
+  /// The text input itself, shared by the one-row mobile composer and the
+  /// taller desktop box so both keep the same IME, paste and drop behaviour.
+  Widget _composerField() => NativeTextField(
+        key: _nativeFieldKey,
+        initialText: widget.draft,
+        composeItems: widget.pendingItems
+            .map((item) => item.isFile
+                ? NativeComposeItem.file(item.path!, path.basename(item.path!))
+                : NativeComposeItem.text(item.text!))
+            .toList(),
+        height: _composeHeight,
+        onContentHeightChanged: (contentHeight) {
+          final nextHeight = contentHeight.clamp(
+            _minimumComposeHeight,
+            _maximumComposeHeight,
+          );
+          if ((nextHeight - _composeHeight).abs() > 0.5) {
+            setState(() => _composeHeight = nextHeight);
+          }
+        },
+        onFilesDropped: (paths) {
+          widget.addDroppedFiles(paths);
+          _focusInput();
+        },
+        onComposeChanged: widget.replacePendingCompose,
+        onChanged: (value) {
+          widget.controller.text = value;
+          widget.onDraftChanged(value);
+        },
+        onSubmitted: _submit,
+      );
+
   @override
   Widget build(BuildContext context) {
     final peerId = widget.selectedPeerId;
@@ -2894,7 +2926,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
             SizedBox(height: 6),
             Text('附近电脑会自动出现；可通过左下角二维码连接手机',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.black54)),
+                style: TextStyle(color: SendHereColors.sub)),
           ]),
         ),
       );
@@ -2905,6 +2937,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
             event.type != TransferEventType.clientConnected &&
             event.type != TransferEventType.clientDisconnected)
         .toList();
+    final mobileComposer = Platform.isIOS || Platform.isAndroid;
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (event) {
@@ -2991,89 +3024,145 @@ class _ConversationPanelState extends State<_ConversationPanel> {
             ),
             const Divider(height: 1),
             Container(
-              margin: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              decoration: BoxDecoration(
-                color: SendHereColors.card,
-                borderRadius:
-                    BorderRadius.circular(SendHereRadius.box),
-                border: Border.all(color: SendHereColors.line),
-              ),
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-                  child: NativeTextField(
-                    key: _nativeFieldKey,
-                    initialText: widget.draft,
-                    composeItems: widget.pendingItems
-                        .map((item) => item.isFile
-                            ? NativeComposeItem.file(
-                                item.path!, path.basename(item.path!))
-                            : NativeComposeItem.text(item.text!))
-                        .toList(),
-                    height: _composeHeight,
-                    onContentHeightChanged: (contentHeight) {
-                      final nextHeight = contentHeight.clamp(
-                        _minimumComposeHeight,
-                        _maximumComposeHeight,
-                      );
-                      if ((nextHeight - _composeHeight).abs() > 0.5) {
-                        setState(() => _composeHeight = nextHeight);
-                      }
-                    },
-                    onFilesDropped: (paths) {
-                      widget.addDroppedFiles(paths);
-                      _focusInput();
-                    },
-                    onComposeChanged: widget.replacePendingCompose,
-                    onChanged: (value) {
-                      widget.controller.text = value;
-                      widget.onDraftChanged(value);
-                    },
-                    onSubmitted: _submit,
-                  ),
-                ),
-                if (!Platform.isMacOS && !Platform.isWindows)
-                  const Divider(height: 1),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(6, 0, 8, 4),
-                  child: Row(children: [
-                    Tooltip(
-                      message: '添加附件',
-                      child: Material(
-                        color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(8),
-                          hoverColor: Theme.of(context)
-                              .colorScheme
-                              .surfaceContainerHighest,
-                          onTap: () async {
-                            await widget.offerFiles();
-                            if (Platform.isMacOS) _focusInput();
-                          },
-                          child: const SizedBox(
-                            width: 34,
-                            height: 32,
-                            // "Add content" reads better than a folder, which
-                            // suggests opening a directory.
-                            child: Icon(Icons.add, size: 20),
+              padding: mobileComposer
+                  ? const EdgeInsets.fromLTRB(10, 9, 10, 9)
+                  : EdgeInsets.zero,
+              margin: mobileComposer
+                  ? EdgeInsets.zero
+                  : const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              decoration: mobileComposer
+                  ? const BoxDecoration(color: SendHereColors.card)
+                  : BoxDecoration(
+                      color: SendHereColors.card,
+                      borderRadius:
+                          BorderRadius.circular(SendHereRadius.box),
+                      border: Border.all(color: SendHereColors.line),
+                    ),
+              child: mobileComposer
+                  // Phones put everything on one row: ＋, the field, then a
+                  // round send key, all bottom-aligned so the field can grow
+                  // upwards without moving the buttons.
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        _ComposerIconButton(
+                          icon: Icons.add,
+                          tooltip: '添加附件',
+                          onTap: widget.offerFiles,
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: SendHereColors.chip,
+                              borderRadius: BorderRadius.circular(17),
+                            ),
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 5),
+                              child: _composerField(),
+                            ),
                           ),
                         ),
+                        const SizedBox(width: 9),
+                        _SendKey(
+                          onTap: () => _submit(widget.controller.text),
+                        ),
+                      ],
+                    )
+                  : Column(mainAxisSize: MainAxisSize.min, children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                        child: _composerField(),
                       ),
-                    ),
-                    const Spacer(),
-                    FilledButton(
-                        onPressed: () => _submit(widget.controller.text),
-                        child: const Text('发送')),
-                  ]),
-                ),
-              ]),
+                      const Divider(height: 1),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(6, 2, 8, 6),
+                        child: Row(children: [
+                          _ComposerIconButton(
+                            icon: Icons.add,
+                            tooltip: '添加附件',
+                            onTap: () async {
+                              await widget.offerFiles();
+                              if (Platform.isMacOS) _focusInput();
+                            },
+                            round: false,
+                          ),
+                          const Spacer(),
+                          FilledButton(
+                              onPressed: () => _submit(widget.controller.text),
+                              child: const Text('发送')),
+                        ]),
+                      ),
+                    ]),
             ),
           ]),
         ),
       ),
     );
   }
+}
+
+/// The ＋ next to the composer. Round with a chip fill on phones, where it sits
+/// directly on the bar; plain with a hover fill on desktop, where it lives
+/// inside the bordered composer box.
+class _ComposerIconButton extends StatelessWidget {
+  const _ComposerIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.round = true,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final Future<void> Function() onTap;
+  final bool round;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(round ? 16 : 8);
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: round ? SendHereColors.chip : Colors.transparent,
+        borderRadius: radius,
+        child: InkWell(
+          borderRadius: radius,
+          hoverColor: SendHereColors.chip,
+          onTap: onTap,
+          child: SizedBox(
+            width: round ? 32 : 34,
+            height: 32,
+            child: Icon(icon, size: 20, color: SendHereColors.ink),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The round send key on phones: an upward arrow on a filled accent circle.
+class _SendKey extends StatelessWidget {
+  const _SendKey({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: SendHereColors.brand,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: const SizedBox(
+            width: 34,
+            height: 34,
+            child: Icon(Icons.arrow_upward,
+                size: 19, color: SendHereColors.onBrand),
+          ),
+        ),
+      );
 }
 
 class _MessageBubble extends StatelessWidget {

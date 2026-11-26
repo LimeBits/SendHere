@@ -20,6 +20,7 @@ import 'nearby_device_service.dart';
 import 'native_text_field.dart';
 import 'message_history.dart';
 import 'outbox.dart';
+import 'theme.dart';
 import 'transfer_event.dart';
 import 'update_checker.dart';
 
@@ -333,7 +334,7 @@ class SendHereApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'SendHere',
-        theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+        theme: sendHereTheme(),
         home: const SendHereHome(),
       );
 }

@@ -3378,6 +3378,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
 
   final _nativeFieldKey = GlobalKey<NativeTextFieldState>();
   final _scrollController = ScrollController();
+
+  /// Mirrors whether the draft is non-empty, so the send key's enabled state
+  /// survives rebuilds without reading the controller during layout.
+  bool _draftHasText = false;
   double _composeHeight = _minimumComposeHeight;
   static const _backGestureEdgeWidth = 56.0;
   static const _backGestureDistance = 42.0;
@@ -3390,12 +3394,23 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   void initState() {
     super.initState();
     _scrollToLatestAfterLayout();
+    // The send key is enabled only when there is something to send, so it must
+    // repaint whenever the draft becomes empty or non-empty — including the
+    // clear that happens asynchronously inside sendPending.
+    widget.controller.addListener(_onDraftChanged);
+    _draftHasText = widget.controller.text.trim().isNotEmpty;
   }
 
   @override
   void didUpdateWidget(covariant _ConversationPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     _scrollToLatestAfterLayout();
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onDraftChanged);
+      widget.controller.addListener(_onDraftChanged);
+    }
+    // Switching devices can restore that conversation's saved draft.
+    _draftHasText = widget.controller.text.trim().isNotEmpty;
   }
 
   void _scrollToLatestAfterLayout() {
@@ -3423,8 +3438,18 @@ class _ConversationPanelState extends State<_ConversationPanel> {
 
   @override
   void dispose() {
+    widget.controller.removeListener(_onDraftChanged);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Rebuilds only when the draft crosses the empty boundary, so typing does
+  /// not trigger a setState on every keystroke.
+  void _onDraftChanged() {
+    final hasText = widget.controller.text.trim().isNotEmpty;
+    if (hasText != _draftHasText && mounted) {
+      setState(() => _draftHasText = hasText);
+    }
   }
 
   void _dismissKeyboard() {
@@ -3480,7 +3505,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
               ),
               const Spacer(),
               FilledButton(
-                  onPressed: () => _submit(widget.controller.text),
+                  onPressed: _hasSomethingToSend
+                      ? () => _submit(widget.controller.text)
+                      : null,
                   child: const Text('发送')),
             ]),
           ),
@@ -3525,7 +3552,12 @@ class _ConversationPanelState extends State<_ConversationPanel> {
               ),
             ),
             const SizedBox(width: 10),
-            _SendKey(onTap: () => _submit(widget.controller.text)),
+            _SendKey(
+              onTap: () => _submit(widget.controller.text),
+              // Attachments alone are worth sending, so a picked image enables
+              // the key even with an empty field.
+              enabled: _hasSomethingToSend,
+            ),
           ],
         ),
       );
@@ -3561,6 +3593,11 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         },
         onSubmitted: _submit,
       );
+
+  /// Whether the composer holds anything worth sending: typed text, or files
+  /// and images already queued for this conversation.
+  bool get _hasSomethingToSend =>
+      _draftHasText || widget.pendingItems.isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -3736,23 +3773,30 @@ class _ComposerIconButton extends StatelessWidget {
 
 /// The round send key on phones: an upward arrow on a filled accent circle.
 class _SendKey extends StatelessWidget {
-  const _SendKey({required this.onTap});
+  const _SendKey({required this.onTap, required this.enabled});
 
   final VoidCallback onTap;
 
+  /// False while there is nothing to send, which tones the key down and stops
+  /// it accepting taps.
+  final bool enabled;
+
   @override
   Widget build(BuildContext context) => Material(
-        color: SendHereColors.brand,
+        color: enabled ? SendHereColors.brand : SendHereColors.chip,
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
-          onTap: onTap,
+          onTap: enabled ? onTap : null,
           // Matches the 42 pt field height so the row reads as one band.
-          child: const SizedBox(
+          child: SizedBox(
             width: 42,
             height: 42,
             child: Icon(Icons.arrow_upward,
-                size: 21, color: SendHereColors.onBrand),
+                size: 21,
+                color: enabled
+                    ? SendHereColors.onBrand
+                    : const Color(0xFFB0B0B6)),
           ),
         ),
       );

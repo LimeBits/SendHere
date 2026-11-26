@@ -1038,6 +1038,16 @@ class _SendHereHomeState extends State<SendHereHome>
 
   void _hideRemoteAddPanel() => setState(() => _remoteAddExpanded = false);
 
+  /// Closes whichever sidebar panel is open. Used by the full-window barrier
+  /// behind the panels.
+  void _hideSidebarPanels() {
+    if (!_phoneQrExpanded && !_remoteAddExpanded) return;
+    setState(() {
+      _phoneQrExpanded = false;
+      _remoteAddExpanded = false;
+    });
+  }
+
   static (String, int) _parseHostPort(String input) {
     final cleaned =
         input.replaceFirst(RegExp(r'^https?://'), '').split('/').first;
@@ -1614,14 +1624,6 @@ class _SendHereHomeState extends State<SendHereHome>
                     : LayoutBuilder(builder: (context, constraints) {
                         final sidebar = _DeviceSidebar(
                           url: url,
-                          qrNetworkToggle:
-                              _address != null && _tailscaleAddress != null
-                                  ? _QrNetworkToggle(
-                                      useTailscale: _qrUseTailscale,
-                                      onChanged: _setQrUseTailscale,
-                                    )
-                                  : null,
-                          qrViaTailscale: _qrAddress == _tailscaleAddress,
                           addRemoteDevice: mobile ? null : _showAddRemoteDevice,
                           connectedPeers: _connectedPeers.values.toList(),
                           connectingPeerIds: _connectingPeerIds,
@@ -1630,19 +1632,8 @@ class _SendHereHomeState extends State<SendHereHome>
                           selectPeer:
                               mobile ? _openMobileConversation : _selectPeer,
                           connectPhone: _showPhoneConnectPanel,
-                          showPhoneConnection: !mobile,
                           phoneQrExpanded: _phoneQrExpanded,
                           remoteAddExpanded: _remoteAddExpanded,
-                          hideRemoteAdd: _hideRemoteAddPanel,
-                          localTailscaleAddress: _tailscaleAddress,
-                          addRemoteDeviceAt: mobile
-                              ? null
-                              : (input, {onStageChanged}) {
-                                  final parsed = _parseHostPort(input);
-                                  return _addRemoteDevice(parsed.$1, parsed.$2,
-                                      onStageChanged: onStageChanged);
-                                },
-                          hidePhoneQr: _hidePhoneConnectPanel,
                           deleteConversation: _deleteConversation,
                           notificationPermission: _notificationPermission,
                           requestNotificationPermission: () =>
@@ -1722,13 +1713,63 @@ class _SendHereHomeState extends State<SendHereHome>
                                   ),
                           );
                         }
+                        final panel = _phoneQrExpanded
+                            ? _PhoneConnectCard(
+                                url: url,
+                                networkToggle: _address != null &&
+                                        _tailscaleAddress != null
+                                    ? _QrNetworkToggle(
+                                        useTailscale: _qrUseTailscale,
+                                        onChanged: _setQrUseTailscale,
+                                      )
+                                    : null,
+                                viaTailscale: _qrAddress == _tailscaleAddress,
+                                onCollapse: _hidePhoneConnectPanel)
+                            : _remoteAddExpanded
+                                ? _RemoteAddCard(
+                                    localTailscaleAddress: _tailscaleAddress,
+                                    addRemoteDevice: (input,
+                                            {onStageChanged}) {
+                                      final parsed = _parseHostPort(input);
+                                      return _addRemoteDevice(
+                                          parsed.$1, parsed.$2,
+                                          onStageChanged: onStageChanged);
+                                    },
+                                    onClose: _hideRemoteAddPanel,
+                                  )
+                                : null;
                         // One surface split by a hairline: grey paper on the
                         // left, white on the right. No gap and no nested
                         // cards, so the window reads as a single panel.
-                        return Row(children: [
-                          SizedBox(width: 252, child: sidebar),
-                          const VerticalDivider(width: 0.5),
-                          Expanded(child: conversation),
+                        return Stack(children: [
+                          Row(children: [
+                            SizedBox(width: 252, child: sidebar),
+                            const VerticalDivider(width: 0.5),
+                            Expanded(child: conversation),
+                          ]),
+                          // The panels live at window level, not inside the
+                          // sidebar: anchored there they were painted under the
+                          // conversation pane, and clicks on the right-hand
+                          // side never reached a dismiss handler.
+                          if (panel != null) ...[
+                            Positioned.fill(
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onTap: _hideSidebarPanels,
+                              ),
+                            ),
+                            Positioned(
+                              left: 12,
+                              width: 290,
+                              top: 62,
+                              child: GestureDetector(
+                                // Absorbs taps so clicking inside the panel
+                                // does not dismiss it.
+                                onTap: () {},
+                                child: panel,
+                              ),
+                            ),
+                          ],
                         ]);
                       }),
       ),
@@ -1888,8 +1929,6 @@ class _PeerDevice {
 class _DeviceSidebar extends StatefulWidget {
   const _DeviceSidebar({
     required this.url,
-    required this.qrNetworkToggle,
-    required this.qrViaTailscale,
     required this.addRemoteDevice,
     required this.connectedPeers,
     required this.connectingPeerIds,
@@ -1897,13 +1936,8 @@ class _DeviceSidebar extends StatefulWidget {
     required this.selectedPeerId,
     required this.selectPeer,
     required this.connectPhone,
-    required this.showPhoneConnection,
     required this.phoneQrExpanded,
     required this.remoteAddExpanded,
-    required this.hideRemoteAdd,
-    required this.localTailscaleAddress,
-    required this.addRemoteDeviceAt,
-    required this.hidePhoneQr,
     required this.deleteConversation,
     required this.notificationPermission,
     required this.requestNotificationPermission,
@@ -1911,8 +1945,6 @@ class _DeviceSidebar extends StatefulWidget {
   });
 
   final String url;
-  final Widget? qrNetworkToggle;
-  final bool qrViaTailscale;
   final VoidCallback? addRemoteDevice;
   final List<_PeerDevice> connectedPeers;
   final Set<String> connectingPeerIds;
@@ -1920,18 +1952,9 @@ class _DeviceSidebar extends StatefulWidget {
   final String? selectedPeerId;
   final ValueChanged<String> selectPeer;
   final VoidCallback connectPhone;
-  final bool showPhoneConnection;
   final bool phoneQrExpanded;
   final bool remoteAddExpanded;
-  final VoidCallback hideRemoteAdd;
-  final String? localTailscaleAddress;
 
-  /// Null on mobile, where remote peers cannot be added by hand.
-  final Future<String?> Function(
-    String input, {
-    ValueChanged<_RemoteAddStage>? onStageChanged,
-  })? addRemoteDeviceAt;
-  final VoidCallback hidePhoneQr;
   final ValueChanged<String> deleteConversation;
   final String? notificationPermission;
   final VoidCallback requestNotificationPermission;
@@ -1961,13 +1984,9 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
     final mobile = Platform.isIOS || Platform.isAndroid;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: () {
-        _collapseActions();
-        // Tapping anywhere outside the panel dismisses it, which is what the
-        // raised card leads the user to expect.
-        if (widget.phoneQrExpanded) widget.hidePhoneQr();
-        if (widget.remoteAddExpanded) widget.hideRemoteAdd();
-      },
+      // Panel dismissal is handled by the window-level barrier; this only
+      // collapses a revealed swipe action.
+      onTap: _collapseActions,
       // Panels are wider than the sidebar and overhang into the conversation
       // area, so the stack must not clip them.
       child: Stack(clipBehavior: Clip.none, children: [
@@ -2055,33 +2074,6 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
             ),
           ]),
         ),
-        // Both panels float over the list in the same slot, anchored under the
-        // ＋, with a soft shadow so neither reads as another device row.
-        if (!mobile && (widget.phoneQrExpanded || widget.remoteAddExpanded))
-          // Wider than the sidebar: the panels need room for a readable QR
-          // code and for a full Tailscale address, so they overhang into the
-          // conversation area rather than being squeezed into 228 points.
-          Positioned(
-            left: 12,
-            width: 290,
-            top: 62,
-            child: GestureDetector(
-              // Absorbs taps so clicking inside the panel does not reach the
-              // sidebar's dismiss handler.
-              onTap: () {},
-              child: widget.phoneQrExpanded
-                  ? _PhoneConnectCard(
-                      url: widget.url,
-                      networkToggle: widget.qrNetworkToggle,
-                      viaTailscale: widget.qrViaTailscale,
-                      onCollapse: widget.hidePhoneQr)
-                  : _RemoteAddCard(
-                      localTailscaleAddress: widget.localTailscaleAddress,
-                      addRemoteDevice: widget.addRemoteDeviceAt!,
-                      onClose: widget.hideRemoteAdd,
-                    ),
-            ),
-          ),
       ]),
     );
   }
@@ -2353,8 +2345,8 @@ class _AddDeviceButtonState extends State<_AddDeviceButton> {
         const _RoundedMenuItem(
           value: 'phone',
           child: Row(children: [
-            Icon(Icons.phone_iphone_outlined, size: 17),
-            SizedBox(width: 8),
+            Icon(Icons.phone_iphone_outlined, size: 16),
+            SizedBox(width: 10),
             Text('连接手机'),
           ]),
         ),
@@ -2362,8 +2354,8 @@ class _AddDeviceButtonState extends State<_AddDeviceButton> {
           const _RoundedMenuItem(
             value: 'remote',
             child: Row(children: [
-              Icon(Icons.add_link, size: 17),
-              SizedBox(width: 8),
+              Icon(Icons.add_link, size: 16),
+              SizedBox(width: 10),
               Text('添加远程电脑'),
             ]),
           ),
@@ -2735,8 +2727,10 @@ class _RoundedMenuItemState
 
   @override
   Widget build(BuildContext context) {
-    final textStyle =
-        Theme.of(context).textTheme.titleMedium?.copyWith(color: widget.color);
+    final textStyle = TextStyle(
+      fontSize: 12.5,
+      color: widget.color ?? SendHereColors.ink,
+    );
     return Semantics(
       enabled: widget.enabled,
       button: true,
@@ -2749,11 +2743,18 @@ class _RoundedMenuItemState
             borderRadius: _radius,
             onTap: widget.enabled ? handleTap : null,
             child: SizedBox(
-              height: 42,
-              child: Center(
-                child: DefaultTextStyle.merge(
-                  style: textStyle,
-                  child: buildChild() ?? const SizedBox.shrink(),
+              height: 38,
+              child: Padding(
+                // Inset the label from the hover fill: without this the icon
+                // sits flush against the rounded edge and the row looks
+                // crowded.
+                padding: const EdgeInsets.symmetric(horizontal: 11),
+                child: Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: DefaultTextStyle.merge(
+                    style: textStyle,
+                    child: buildChild() ?? const SizedBox.shrink(),
+                  ),
                 ),
               ),
             ),

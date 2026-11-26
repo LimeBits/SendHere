@@ -1636,7 +1636,7 @@ class _SendHereHomeState extends State<SendHereHome>
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        toolbarHeight: mobile ? kToolbarHeight : 12,
+        toolbarHeight: mobile ? kToolbarHeight : 0,
         automaticallyImplyLeading: false,
         leading: mobile && _showMobileConversation
             ? IconButton(
@@ -1672,7 +1672,11 @@ class _SendHereHomeState extends State<SendHereHome>
             : null,
       ),
       body: Padding(
-        padding: EdgeInsets.all(mobile ? 0 : 16),
+        // Desktop: the window has no title bar, so the top inset only needs to
+        // clear the floating traffic lights.
+        padding: mobile
+            ? EdgeInsets.zero
+            : const EdgeInsets.fromLTRB(12, 30, 12, 12),
         child: _error != null
             ? _ErrorView(error: _error!, retry: _startServer)
             : _server == null
@@ -2008,13 +2012,17 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
         if (widget.phoneQrExpanded) widget.hidePhoneQr();
       },
       child: Card(
+        // The sidebar shares the page background so the list no longer looks
+        // like a white card nested inside another white card. Mobile keeps the
+        // plain card, where the list is the whole screen.
+        color: mobile ? null : SendHereColors.paper,
         clipBehavior: Clip.antiAlias,
         child:
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const Padding(
-            padding: EdgeInsets.fromLTRB(16, 18, 16, 10),
+            padding: EdgeInsets.fromLTRB(14, 12, 14, 8),
             child: Text('设备列表',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
           ),
           if (mobile &&
               widget.notificationPermission != null &&
@@ -2285,10 +2293,10 @@ class _DeviceTile extends StatelessWidget {
     final phone = device.name.contains('手机') || device.name.contains('iPhone');
     final statusLabel = _statusLabel(context);
     final tile = Material(
-      color: Theme.of(context).scaffoldBackgroundColor,
+      color: SendHereColors.paper,
       child: ListTile(
         selected: selected,
-        selectedTileColor: Theme.of(context).colorScheme.secondaryContainer,
+        selectedTileColor: SendHereColors.brandSoft,
         leading: _DeviceAvatar(
           phone: phone,
           online: device.online,
@@ -2325,7 +2333,7 @@ class _DeviceTile extends StatelessWidget {
         reveal: reveal,
         collapse: collapse,
         revealedChild: Material(
-          color: Theme.of(context).scaffoldBackgroundColor,
+          color: SendHereColors.paper,
           child: ListTile(
             minVerticalPadding: 7,
             title: Text(
@@ -2611,18 +2619,8 @@ class _PhoneConnectCard extends StatelessWidget {
               onPressed: onCollapse,
             ),
           ]),
-          const SizedBox(height: 2),
-          Text(
-              viaTailscale
-                  ? '手机需开启 Tailscale，用系统相机扫一扫，不在同一 Wi‑Fi 也能传。'
-                  : '用系统相机或微信扫一扫，无需安装 App。',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: SendHereColors.sub)),
-          if (networkToggle != null) ...[
-            const SizedBox(height: 8),
-            networkToggle!,
-          ],
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+          // The QR code leads, so it is the widest element in the panel.
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
@@ -2630,13 +2628,29 @@ class _PhoneConnectCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: SendHereColors.line),
             ),
-            child: QrImageView(data: url, size: 132),
+            child: QrImageView(data: url, size: 148),
           ),
-          const SizedBox(height: 8),
+          if (networkToggle != null) networkToggle!,
+          const SizedBox(height: 4),
+          Text(
+              viaTailscale
+                  ? '手机需开启 Tailscale，用系统相机扫一扫，不在同一 Wi‑Fi 也能传。'
+                  : '用系统相机或微信扫一扫，无需安装 App。',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 11, color: SendHereColors.sub)),
+          const SizedBox(height: 6),
           TextButton.icon(
-            onPressed: onCollapse,
-            icon: const Icon(Icons.keyboard_arrow_down, size: 18),
-            label: const Text('收起二维码'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: url));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('连接链接已复制')),
+                );
+              }
+            },
+            icon: const Icon(Icons.copy_outlined, size: 16),
+            label: const Text('复制连接链接',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ),
         ]),
       );
@@ -2649,22 +2663,68 @@ class _QrNetworkToggle extends StatelessWidget {
   final bool useTailscale;
   final ValueChanged<bool> onChanged;
 
+  /// Two text links rather than a segmented button: the segmented control
+  /// stretched to the panel width, which made it wider than the QR code below
+  /// it and left the panel looking top-heavy.
   @override
-  Widget build(BuildContext context) => SegmentedButton<bool>(
-        showSelectedIcon: false,
-        style: const ButtonStyle(visualDensity: VisualDensity.compact),
-        segments: const [
-          ButtonSegment(
-              value: false,
-              icon: Icon(Icons.wifi, size: 16),
-              label: Text('局域网')),
-          ButtonSegment(
-              value: true,
-              icon: Icon(Icons.vpn_lock_outlined, size: 16),
-              label: Text('Tailscale')),
+  Widget build(BuildContext context) => Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _NetworkTab(
+            label: '局域网',
+            selected: !useTailscale,
+            onTap: () => onChanged(false),
+          ),
+          const SizedBox(width: 16),
+          _NetworkTab(
+            label: 'Tailscale',
+            selected: useTailscale,
+            onTap: () => onChanged(true),
+          ),
         ],
-        selected: {useTailscale},
-        onSelectionChanged: (values) => onChanged(values.first),
+      );
+}
+
+class _NetworkTab extends StatelessWidget {
+  const _NetworkTab({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          // Keeps the 40 pt touch target the design calls for while the
+          // underline still hugs the text.
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Container(
+            padding: const EdgeInsets.only(bottom: 3),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: selected ? SendHereColors.brand : Colors.transparent,
+                  width: 2,
+                ),
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                color:
+                    selected ? SendHereColors.brandText : SendHereColors.sub,
+              ),
+            ),
+          ),
+        ),
       );
 }
 
@@ -2737,7 +2797,7 @@ class _ConversationHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final viaTailscale = online && transport == PeerTransport.tailscale;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 14, 14),
+      padding: const EdgeInsets.fromLTRB(16, 12, 14, 10),
       child: Row(children: [
         Expanded(
           child: Text(name,

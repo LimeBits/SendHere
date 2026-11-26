@@ -324,7 +324,16 @@ class MainFlutterWindow: NSWindow {
     let windowFrame = self.frame
     self.contentViewController = containerController
     self.setFrame(windowFrame, display: true)
+
+    // Content runs to the top edge and the title text is hidden, so the window
+    // reads as one surface instead of a toolbar stacked on a panel. The traffic
+    // lights stay, floating over the content, so Flutter must keep the top-left
+    // area clear (see the leading padding in the sidebar and header).
     self.title = "SendHere"
+    self.titleVisibility = .hidden
+    self.titlebarAppearsTransparent = true
+    self.styleMask.insert(.fullSizeContentView)
+    self.isMovableByWindowBackground = true
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 

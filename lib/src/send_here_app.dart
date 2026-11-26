@@ -3253,8 +3253,11 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   /// desktop numbers used to apply to both, which left phones with a 96 pt
   /// field sitting in a one-line layout.
   static bool get _mobileLayout => Platform.isIOS || Platform.isAndroid;
-  static double get _minimumComposeHeight => _mobileLayout ? 34.0 : 96.0;
-  static double get _maximumComposeHeight => _mobileLayout ? 112.0 : 180.0;
+
+  /// 42 matches the ask bar in NoteHere: tall enough to read and to hit
+  /// comfortably, where 34 felt cramped against the round send key.
+  static double get _minimumComposeHeight => _mobileLayout ? 42.0 : 96.0;
+  static double get _maximumComposeHeight => _mobileLayout ? 124.0 : 180.0;
 
   final _nativeFieldKey = GlobalKey<NativeTextFieldState>();
   final _scrollController = ScrollController();
@@ -3373,7 +3376,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         // Clears the home indicator without leaving a gap on devices that have
         // no inset. Scaffold already keeps the keyboard out of the way.
         padding: EdgeInsets.fromLTRB(
-            10, 9, 10, 9 + MediaQuery.of(context).padding.bottom),
+            14, 9, 14, 10 + MediaQuery.of(context).padding.bottom),
         decoration: const BoxDecoration(color: SendHereColors.card),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -3382,21 +3385,24 @@ class _ConversationPanelState extends State<_ConversationPanel> {
               icon: Icons.add,
               tooltip: '添加附件',
               onTap: widget.offerFiles,
+              size: 36,
             ),
-            const SizedBox(width: 9),
+            const SizedBox(width: 10),
             Expanded(
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: SendHereColors.chip,
-                  borderRadius: BorderRadius.circular(17),
+                  // Half of the 42 pt minimum height, so an empty field is a
+                  // pill and a grown one keeps square-ish shoulders.
+                  borderRadius: BorderRadius.circular(21),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  padding: const EdgeInsets.symmetric(horizontal: 11),
                   child: _composerField(),
                 ),
               ),
             ),
-            const SizedBox(width: 9),
+            const SizedBox(width: 10),
             _SendKey(onTap: () => _submit(widget.controller.text)),
           ],
         ),
@@ -3535,7 +3541,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                     : ListView.builder(
                         controller: _scrollController,
                         reverse: true,
-                        padding: EdgeInsets.all(mobileComposer ? 12 : 18),
+                        // 16 on phones: 12 left the bubbles almost touching
+                        // the screen edges.
+                        padding: EdgeInsets.all(mobileComposer ? 16 : 18),
                         itemCount: messages.length,
                         itemBuilder: (_, index) => _MessageBubble(
                           event: messages[index],
@@ -3569,12 +3577,14 @@ class _ComposerIconButton extends StatelessWidget {
     required this.tooltip,
     required this.onTap,
     this.filled = true,
+    this.size = 32,
   });
 
   final IconData icon;
   final String tooltip;
   final Future<void> Function() onTap;
   final bool filled;
+  final double size;
 
   @override
   Widget build(BuildContext context) => Tooltip(
@@ -3590,9 +3600,9 @@ class _ComposerIconButton extends StatelessWidget {
             hoverColor: SendHereColors.chip,
             onTap: onTap,
             child: SizedBox(
-              width: 32,
-              height: 32,
-              child: Icon(icon, size: 19, color: SendHereColors.ink),
+              width: size,
+              height: size,
+              child: Icon(icon, size: size * 0.58, color: SendHereColors.ink),
             ),
           ),
         ),
@@ -3612,11 +3622,12 @@ class _SendKey extends StatelessWidget {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onTap,
+          // Matches the 42 pt field height so the row reads as one band.
           child: const SizedBox(
-            width: 34,
-            height: 34,
+            width: 42,
+            height: 42,
             child: Icon(Icons.arrow_upward,
-                size: 19, color: SendHereColors.onBrand),
+                size: 21, color: SendHereColors.onBrand),
           ),
         ),
       );
@@ -3643,9 +3654,10 @@ class _MessageBubble extends StatelessWidget {
       child: ConstrainedBox(
         // Phones cap bubbles at a share of the width so a long message still
         // leaves the opposite edge visible; desktop caps at a readable measure.
+        // The 32 subtracts the list's own horizontal padding.
         constraints: BoxConstraints(
             maxWidth: Platform.isIOS || Platform.isAndroid
-                ? MediaQuery.of(context).size.width * 0.76
+                ? (MediaQuery.of(context).size.width - 32) * 0.82
                 : 520),
         child: Padding(
           padding: const EdgeInsets.only(bottom: 12),

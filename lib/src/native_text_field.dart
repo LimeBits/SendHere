@@ -217,8 +217,8 @@ class NativeTextFieldState extends State<NativeTextField> {
         decoration: const InputDecoration(
           border: InputBorder.none,
           isDense: true,
-          // Vertically centred in the 34 pt pill the composer draws around it.
-          contentPadding: EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+          // Vertically centred in the 42 pt pill the composer draws around it.
+          contentPadding: EdgeInsets.symmetric(horizontal: 2, vertical: 11),
           hintText: '输入消息',
           hintStyle: TextStyle(fontSize: 13.5, color: Color(0xFF9A9AA0)),
         ),

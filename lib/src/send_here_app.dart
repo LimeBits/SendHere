@@ -2300,6 +2300,28 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                           : const SizedBox(height: 1),
                     ),
             ),
+            // Only on phones: desktop already shows the build in its window
+            // chrome and has no "bottom of the list" to speak of. Deliberately
+            // faint — it is here so a tester can read off which build they are
+            // running, not as a piece of interface.
+            if (mobile)
+              Padding(
+                padding: EdgeInsets.only(
+                  top: 8,
+                  // Clears the home indicator, which the list is allowed to run
+                  // under but a line of text is not.
+                  bottom: 10 + MediaQuery.of(context).padding.bottom,
+                ),
+                child: const Text(
+                  'v$sendHereVersion ($sendHereBuildNumber)',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11,
+                    letterSpacing: 0.2,
+                    color: Color(0xFFB9BBC0),
+                  ),
+                ),
+              ),
           ]),
         ),
       ]),

@@ -177,11 +177,22 @@ Future<void> _showImageActions(
   }
 }
 
+/// A Hero tag unique to one message bubble.
+///
+/// Keying on the file path alone crashed the app: sending the same picture
+/// twice, or receiving a copy of one already sent, put two Heroes with the
+/// same tag on screen, and Flutter throws when it finds duplicates. The
+/// timestamp and transfer id distinguish bubbles that share a file.
+String _heroTag(TransferEvent event) =>
+    'image:${event.transferId ?? ''}:'
+    '${event.createdAt.microsecondsSinceEpoch}:${event.localPath}';
+
 Future<void> _showImagePreview(
   BuildContext context,
   String filePath,
-  String fileName,
-) async {
+  String fileName, {
+  required String heroTag,
+}) async {
   if (Platform.isMacOS) {
     try {
       await _imagePreviewChannel.invokeMethod<void>('show', {
@@ -206,8 +217,8 @@ Future<void> _showImagePreview(
       barrierColor: Colors.transparent,
       transitionDuration: const Duration(milliseconds: 260),
       reverseTransitionDuration: const Duration(milliseconds: 220),
-      pageBuilder: (_, __, ___) =>
-          _ImagePreviewPage(filePath: filePath, fileName: fileName),
+      pageBuilder: (_, __, ___) => _ImagePreviewPage(
+          filePath: filePath, fileName: fileName, heroTag: heroTag),
       transitionsBuilder: (_, animation, __, child) => FadeTransition(
         opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
         child: child,
@@ -217,10 +228,17 @@ Future<void> _showImagePreview(
 }
 
 class _ImagePreviewPage extends StatefulWidget {
-  const _ImagePreviewPage({required this.filePath, required this.fileName});
+  const _ImagePreviewPage({
+    required this.filePath,
+    required this.fileName,
+    required this.heroTag,
+  });
 
   final String filePath;
   final String fileName;
+
+  /// Must match the tag on the bubble that opened this page.
+  final String heroTag;
 
   @override
   State<_ImagePreviewPage> createState() => _ImagePreviewPageState();
@@ -312,7 +330,7 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
                     maxScale: 5,
                     child: Center(
                       child: Hero(
-                        tag: 'image:${widget.filePath}',
+                        tag: widget.heroTag,
                         child: Image.file(
                           File(widget.filePath),
                           width: double.infinity,
@@ -4003,6 +4021,7 @@ class _MessageBubble extends StatelessWidget {
                                           context,
                                           event.localPath!,
                                           event.fileName ?? '图片',
+                                          heroTag: _heroTag(event),
                                         )
                                     : () => _openReceivedFile(
                                           context,
@@ -4033,7 +4052,7 @@ class _MessageBubble extends StatelessWidget {
                                     // shrinks it back on dismiss. The bubble's
                                     // own clip rounds the corners.
                                     child: Hero(
-                                      tag: 'image:${event.localPath!}',
+                                      tag: _heroTag(event),
                                       child: Image.file(File(event.localPath!),
                                           height: 180,
                                           fit: BoxFit.contain,

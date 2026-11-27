@@ -1647,10 +1647,7 @@ class _SendHereHomeState extends State<SendHereHome>
               ),
               child: QrImageView(data: url, size: 220),
             ),
-            const SizedBox(height: 14),
-            // A full-width row rather than a bare TextButton: the text-sized
-            // hit area was easy to miss, and tapping just beside it did
-            // nothing.
+            const SizedBox(height: 16),
             _CopyLinkButton(url: url),
           ]),
         ),
@@ -2263,9 +2260,12 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
 /// was only as wide as its label, so taps near it did nothing, and repeated
 /// taps queued up one snack bar per press.
 class _CopyLinkButton extends StatefulWidget {
-  const _CopyLinkButton({required this.url});
+  const _CopyLinkButton({required this.url, this.compact = false});
 
   final String url;
+
+  /// Shorter variant for the desktop sidebar panel, which is only 290 wide.
+  final bool compact;
 
   @override
   State<_CopyLinkButton> createState() => _CopyLinkButtonState();
@@ -2295,36 +2295,31 @@ class _CopyLinkButtonState extends State<_CopyLinkButton> {
 
   @override
   Widget build(BuildContext context) {
-    final accent =
-        _copied ? SendHereColors.online : SendHereColors.brandText;
-    return Material(
-      // A filled surface, never transparent: a transparent Material takes part
-      // in hit testing only where its child paints, so taps beside the label
-      // fell through and the button felt broken.
-      color: SendHereColors.chip,
-      borderRadius: BorderRadius.circular(11),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: _copy,
-        child: SizedBox(
-          // Full width of the sheet, 48 tall: comfortably above the 44 pt
-          // minimum touch target.
-          width: double.infinity,
-          height: 48,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(_copied ? Icons.check_circle : Icons.copy_outlined,
-                  size: 18, color: accent),
-              const SizedBox(width: 8),
-              Text(_copied ? '已复制' : '复制连接链接',
-                  style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: accent)),
-            ],
-          ),
+    // A real FilledButton rather than a hand-built Material + InkWell. Earlier
+    // attempts kept missing taps because the custom surface only registered
+    // hits where its child painted; the framework's button guarantees the
+    // whole rectangle is tappable and sized for touch.
+    return SizedBox(
+      width: double.infinity,
+      height: widget.compact ? 38 : 50,
+      child: FilledButton.icon(
+        onPressed: _copy,
+        style: FilledButton.styleFrom(
+          // Confirmation stays on the brand colour, only lightened, so it
+          // reads as the same button rather than a success message.
+          backgroundColor:
+              _copied ? SendHereColors.brandSoft : SendHereColors.brand,
+          foregroundColor:
+              _copied ? SendHereColors.brandText : SendHereColors.onBrand,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          textStyle: TextStyle(
+              fontSize: widget.compact ? 12.5 : 15,
+              fontWeight: FontWeight.w600),
         ),
+        icon: Icon(_copied ? Icons.check : Icons.copy_outlined,
+            size: widget.compact ? 16 : 19),
+        label: Text(_copied ? '已复制' : '复制连接链接'),
       ),
     );
   }
@@ -3240,7 +3235,7 @@ class _PhoneConnectCard extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 11, color: SendHereColors.sub)),
           const SizedBox(height: 2),
-          _CopyLinkButton(url: url),
+          _CopyLinkButton(url: url, compact: true),
         ],
       );
 }

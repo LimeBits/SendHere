@@ -11,10 +11,12 @@ class SceneDelegate: FlutterSceneDelegate {
     willConnectTo session: UISceneSession,
     options connectionOptions: UIScene.ConnectionOptions
   ) {
+    sendHereLaunchBreadcrumb("native: scene willConnect")
     super.scene(scene, willConnectTo: session, options: connectionOptions)
 
     DispatchQueue.main.async { [weak self] in
       self?.configureChannels()
+      sendHereLaunchBreadcrumb("native: channels ready")
     }
   }
 

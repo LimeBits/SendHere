@@ -2318,36 +2318,42 @@ class _CopyLinkButtonState extends State<_CopyLinkButton> {
 
   @override
   Widget build(BuildContext context) {
-    // A quiet grey row rather than a saturated block: the QR code is the hero
-    // of this sheet and a full-width blue bar shouted over it.
+    // A bare text link: no fill, no border, so the QR code stays the hero of
+    // the sheet. The tap target, though, is the whole row plus padding — a
+    // text-sized target was the original complaint, and it read as "the
+    // button does nothing" rather than "I missed".
     //
-    // The surface is a filled `Material` (never transparent) and the InkWell
-    // is opaque internally, so the whole rectangle reacts to touch instead of
-    // only the pixels the icon and label paint on. The row is deliberately
-    // tall — 52 on mobile — because the earlier 48-tall version still felt
-    // fiddly to hit.
+    // `MaterialType.transparency` still passes hit tests down to the InkWell,
+    // whose gesture detector is opaque internally, so every pixel of this
+    // rectangle copies — not just the ones the icon and label paint on.
     return SizedBox(
       width: double.infinity,
-      height: widget.compact ? 42 : 52,
+      // 56 tall on mobile: comfortably above the 44 pt minimum, and the row
+      // still looks like a plain link because nothing is painted behind it.
+      height: widget.compact ? 44 : 56,
       child: Material(
-        color: SendHereColors.chip,
-        borderRadius: BorderRadius.circular(11),
-        clipBehavior: Clip.antiAlias,
+        type: MaterialType.transparency,
         child: InkWell(
           onTap: _copy,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(_copied ? Icons.check : Icons.copy_outlined,
-                  size: widget.compact ? 16 : 18,
-                  color: SendHereColors.brandText),
-              const SizedBox(width: 7),
-              Text(_copied ? '已复制' : '复制连接链接',
-                  style: TextStyle(
-                      fontSize: widget.compact ? 12.5 : 14,
-                      fontWeight: FontWeight.w600,
-                      color: SendHereColors.brandText)),
-            ],
+          borderRadius: BorderRadius.circular(11),
+          child: Padding(
+            // Horizontal breathing room so taps just left/right of the label
+            // land too, not only dead centre.
+            padding: EdgeInsets.symmetric(horizontal: widget.compact ? 10 : 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(_copied ? Icons.check : Icons.copy_outlined,
+                    size: widget.compact ? 16 : 19,
+                    color: SendHereColors.brandText),
+                SizedBox(width: widget.compact ? 6 : 8),
+                Text(_copied ? '已复制' : '复制连接链接',
+                    style: TextStyle(
+                        fontSize: widget.compact ? 12.5 : 14.5,
+                        fontWeight: FontWeight.w600,
+                        color: SendHereColors.brandText)),
+              ],
+            ),
           ),
         ),
       ),

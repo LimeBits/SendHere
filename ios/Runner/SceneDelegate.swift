@@ -34,6 +34,21 @@ class SceneDelegate: FlutterSceneDelegate {
       result(name.isEmpty ? UIDevice.current.model : name)
     }
 
+    // Showing a QR code that another phone is about to scan must survive the
+    // auto-lock timer: a locked iPhone suspends SendHere, its sockets go away,
+    // and the scan lands on a port nothing is listening on.
+    let screenChannel = FlutterMethodChannel(
+      name: "sendhere/screen", binaryMessenger: controller.binaryMessenger)
+    screenChannel.setMethodCallHandler { call, result in
+      guard call.method == "keepAwake" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let arguments = call.arguments as? [String: Any]
+      UIApplication.shared.isIdleTimerDisabled = arguments?["enabled"] as? Bool ?? false
+      result(nil)
+    }
+
     let notificationChannel = FlutterMethodChannel(
       name: "sendhere/notifications", binaryMessenger: controller.binaryMessenger)
     notificationChannel.setMethodCallHandler { [weak self] call, result in

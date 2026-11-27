@@ -28,6 +28,23 @@ import 'update_checker.dart';
 const _mobileFileChannel = MethodChannel('sendhere/mobile_file');
 const _notificationChannel = MethodChannel('sendhere/notifications');
 const _imagePreviewChannel = MethodChannel('sendhere/image_preview');
+const _screenChannel = MethodChannel('sendhere/screen');
+
+/// Holds the screen awake while a QR code is on display.
+///
+/// Scanning takes a few seconds with the phone doing nothing, which is exactly
+/// when auto-lock fires. A locked iPhone suspends SendHere, the listening socket
+/// goes away, and the code the other phone just scanned answers nothing.
+Future<void> _keepScreenAwake(bool enabled) async {
+  if (!Platform.isIOS) return;
+  try {
+    await _screenChannel.invokeMethod<void>('keepAwake', {'enabled': enabled});
+  } on PlatformException {
+    // Without the native handler the app simply keeps the default auto-lock.
+  } on MissingPluginException {
+    // Same: a build that predates this channel.
+  }
+}
 
 Future<void> _openReceivedFile(BuildContext context, String filePath) async {
   try {
@@ -1703,6 +1720,7 @@ class _SendHereHomeState extends State<SendHereHome>
     final url = 'http://$address:${server.port}/?token=${server.token}';
     LaunchLog.mark('qr: issued $address:${server.port}');
     _qrUrl.value = url;
+    unawaited(_keepScreenAwake(true));
     await showModalBottomSheet<void>(
       context: context,
       // No drag-to-dismiss: the sheet's own vertical drag recogniser kept
@@ -1776,7 +1794,7 @@ class _SendHereHomeState extends State<SendHereHome>
           ),
         ),
       ),
-    );
+    ).whenComplete(() => unawaited(_keepScreenAwake(false)));
   }
 
   void _hidePhoneConnectPanel() => setState(() => _phoneQrExpanded = false);

@@ -656,6 +656,8 @@ class _SendHereHomeState extends State<SendHereHome>
       // _startServer paused needs to come back. Re-subscribing here keeps the
       // computer list populated without rebuilding the QR token or web sessions.
       await _subscribeNearbyDiscovery(server.port);
+      // The phone may have joined a different network while away.
+      await _refreshLocalAddresses();
       // iOS tears down sockets while suspended, so sweep immediately instead
       // of waiting out the periodic interval.
       _reconnectLanPeers();
@@ -855,13 +857,10 @@ class _SendHereHomeState extends State<SendHereHome>
         });
         _startTailscaleReconnect();
         _startLanReconnect();
-        if (addresses.isEmpty &&
-            tailscale.isEmpty &&
-            (Platform.isIOS || Platform.isAndroid)) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('未检测到 Wi‑Fi 局域网地址，暂时无法生成连接二维码')),
-          );
-        }
+        // No snack bar for a missing LAN address: when there is none, the whole
+        // screen already shows _NoLanView, which says the same thing with a
+        // retry button. The toast was a duplicate that popped up on every
+        // server start, including each return to the foreground.
       }
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
@@ -1137,6 +1136,34 @@ class _SendHereHomeState extends State<SendHereHome>
   }
 
   void _hideRemoteAddPanel() => setState(() => _remoteAddExpanded = false);
+
+  /// Re-reads the LAN and Tailscale addresses of this device.
+  ///
+  /// [_startServer] captures them once, but a phone that roams to another
+  /// Wi-Fi gets a new IP, which would leave the connect QR code pointing at an
+  /// address no one can reach.
+  Future<void> _refreshLocalAddresses() async {
+    final server = _server;
+    if (server == null) return;
+    final addresses = await server.localAddresses();
+    final tailscale = await server.tailscaleAddresses();
+    if (!mounted) return;
+    final address = addresses.isEmpty ? null : addresses.first;
+    final tailscaleAddress = tailscale.isEmpty ? null : tailscale.first;
+    if (address == _address && tailscaleAddress == _tailscaleAddress) return;
+    final localDeviceId = _nearby.deviceId;
+    if (localDeviceId != null && (address != null || tailscaleAddress != null)) {
+      server.setLocalEndpoint(
+        address: address,
+        tailscaleAddress: tailscaleAddress,
+        deviceId: localDeviceId,
+      );
+    }
+    setState(() {
+      _address = address;
+      _tailscaleAddress = tailscaleAddress;
+    });
+  }
 
   /// Closes whichever sidebar panel is open. Used by the full-window barrier
   /// behind the panels.
@@ -1557,9 +1584,13 @@ class _SendHereHomeState extends State<SendHereHome>
     });
   }
 
-  void _showPhoneConnectPanel() {
+  Future<void> _showPhoneConnectPanel() async {
     final server = _server;
-    if (server == null || _address == null) return;
+    if (server == null) return;
+    // Pick up a changed IP before drawing the code, for the same reason as
+    // _showMobileConnectQr.
+    await _refreshLocalAddresses();
+    if (!mounted || _address == null) return;
     // Never present a QR code that may have expired while the app was open.
     // This deliberately keeps existing phone sessions alive.
     server.refreshToken(disconnectExisting: false);
@@ -1571,8 +1602,20 @@ class _SendHereHomeState extends State<SendHereHome>
 
   Future<void> _showMobileConnectQr() async {
     final server = _server;
-    final address = _address;
-    if (server == null || address == null) {
+    if (server == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('本地服务尚未就绪，请稍后再试')),
+      );
+      return;
+    }
+    // Re-read the interfaces now instead of trusting the address captured when
+    // the server started: after the phone joins a different Wi-Fi its IP
+    // changes, and a stale address produces a QR code nobody can reach.
+    final addresses = await server.localAddresses();
+    if (!mounted) return;
+    final address = addresses.isEmpty ? null : addresses.first;
+    if (address != _address) setState(() => _address = address);
+    if (address == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请先连接 Wi‑Fi，才能生成局域网连接二维码')),
       );
@@ -1602,19 +1645,11 @@ class _SendHereHomeState extends State<SendHereHome>
               ),
               child: QrImageView(data: url, size: 220),
             ),
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: url));
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('连接链接已复制')),
-                  );
-                }
-              },
-              icon: const Icon(Icons.copy_outlined, size: 18),
-              label: const Text('复制连接链接'),
-            ),
+            const SizedBox(height: 14),
+            // A full-width row rather than a bare TextButton: the text-sized
+            // hit area was easy to miss, and tapping just beside it did
+            // nothing.
+            _CopyLinkButton(url: url),
           ]),
         ),
       ),
@@ -2208,6 +2243,76 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
       ]),
     );
   }
+}
+
+/// Copies the connect URL and confirms it in place.
+///
+/// Replaces an earlier `TextButton.icon` plus snack bar: the button's hit area
+/// was only as wide as its label, so taps near it did nothing, and repeated
+/// taps queued up one snack bar per press.
+class _CopyLinkButton extends StatefulWidget {
+  const _CopyLinkButton({required this.url});
+
+  final String url;
+
+  @override
+  State<_CopyLinkButton> createState() => _CopyLinkButtonState();
+}
+
+class _CopyLinkButtonState extends State<_CopyLinkButton> {
+  bool _copied = false;
+  Timer? _resetTimer;
+
+  @override
+  void dispose() {
+    _resetTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.url));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    // Restarting the timer means holding the button down repeatedly just keeps
+    // showing one confirmation, instead of stacking notifications.
+    _resetTimer?.cancel();
+    _resetTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: _copied ? SendHereColors.chip : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: _copy,
+          child: SizedBox(
+            // Full width of the sheet and a 44 pt tall target.
+            width: double.infinity,
+            height: 44,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(_copied ? Icons.check : Icons.copy_outlined,
+                    size: 17,
+                    color: _copied
+                        ? SendHereColors.online
+                        : SendHereColors.brandText),
+                const SizedBox(width: 7),
+                Text(_copied ? '已复制' : '复制连接链接',
+                    style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: _copied
+                            ? SendHereColors.online
+                            : SendHereColors.brandText)),
+              ],
+            ),
+          ),
+        ),
+      );
 }
 
 /// The 添加远程电脑 panel. It sits in the same sidebar slot as the QR panel so
@@ -3098,19 +3203,7 @@ class _PhoneConnectCard extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 11, color: SendHereColors.sub)),
           const SizedBox(height: 2),
-          TextButton.icon(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: url));
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('连接链接已复制')),
-                );
-              }
-            },
-            icon: const Icon(Icons.copy_outlined, size: 15),
-            label: const Text('复制连接链接',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-          ),
+          _CopyLinkButton(url: url),
         ],
       );
 }

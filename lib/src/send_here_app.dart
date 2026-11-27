@@ -439,6 +439,15 @@ class _SendHereHomeState extends State<SendHereHome>
   bool _remoteAddExpanded = false;
   bool _showMobileConversation = false;
   bool _restartingForForeground = false;
+
+  /// In-flight server start, so a second request joins the first instead of
+  /// racing it into a second bind (see [_startServer]).
+  Future<void>? _startingServer;
+
+  /// The URL currently shown in the phone QR sheet. Kept live so a server
+  /// restart that changes the port or token replaces the code on screen
+  /// instead of leaving a dead one there.
+  final _qrUrl = ValueNotifier<String?>(null);
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
   final _unreadCounts = <String, int>{};
   String? _notificationPermission;
@@ -682,6 +691,13 @@ class _SendHereHomeState extends State<SendHereHome>
       // The server survived the background, so only the LAN discovery that
       // _startServer paused needs to come back. Re-subscribing here keeps the
       // computer list populated without rebuilding the QR token or web sessions.
+      // A non-null server object is not proof of life though: iOS can take the
+      // socket away while suspended, so confirm it really answers first.
+      if (!await server.isListening()) {
+        LaunchLog.mark('foreground: server socket is gone, restarting');
+        await _startServer();
+        return;
+      }
       await _subscribeNearbyDiscovery(server.port);
       // The phone may have joined a different network while away.
       await _refreshLocalAddresses();
@@ -767,7 +783,21 @@ class _SendHereHomeState extends State<SendHereHome>
             _connectedPeers.values.map((device) => device.toJson()).toList()));
   }
 
-  Future<void> _startServer() async {
+  Future<void> _startServer() {
+    // Cold start can ask for a server twice at once: once when the saved state
+    // finishes loading and once from the resumed lifecycle event. Both called
+    // `serve(..., 8899)`, the loser fell back to an ephemeral port, and the
+    // winner could end up attached to the QR code. Coalesce instead, so the
+    // address a phone scans is always 8899 and always the live listener.
+    return _startingServer ??= _doStartServer().whenComplete(() {
+      _startingServer = null;
+    });
+  }
+
+  Future<void> _doStartServer() async {
+    // Blank the code while the port and token are in flux, so a sheet that is
+    // already open shows a spinner instead of a code that no longer routes.
+    _qrUrl.value = null;
     try {
       await _subscription?.cancel();
       await _nearbySubscription?.cancel();
@@ -884,6 +914,7 @@ class _SendHereHomeState extends State<SendHereHome>
                   (preferences.getBool(_qrUseTailscaleKey) ?? false));
           _error = null;
         });
+        _qrUrl.value = _url;
         _startTailscaleReconnect();
         _startLanReconnect();
         // No snack bar for a missing LAN address: when there is none, the whole
@@ -945,6 +976,7 @@ class _SendHereHomeState extends State<SendHereHome>
     if (_tailscaleAddress == null && value) return;
     if (_address == null && !value) return;
     setState(() => _qrUseTailscale = value);
+    _qrUrl.value = _url;
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_qrUseTailscaleKey, value);
   }
@@ -1192,6 +1224,7 @@ class _SendHereHomeState extends State<SendHereHome>
       _address = address;
       _tailscaleAddress = tailscaleAddress;
     });
+    _qrUrl.value = _url;
   }
 
   /// Closes whichever sidebar panel is open. Used by the full-window barrier
@@ -1614,8 +1647,14 @@ class _SendHereHomeState extends State<SendHereHome>
   }
 
   Future<void> _showPhoneConnectPanel() async {
-    final server = _server;
+    var server = _server;
     if (server == null) return;
+    // Never draw a code for a listener that has stopped answering.
+    if (!await server.isListening()) {
+      await _startServer();
+      server = _server;
+      if (server == null) return;
+    }
     // Pick up a changed IP before drawing the code, for the same reason as
     // _showMobileConnectQr.
     await _refreshLocalAddresses();
@@ -1627,15 +1666,25 @@ class _SendHereHomeState extends State<SendHereHome>
       _remoteAddExpanded = false;
       _phoneQrExpanded = true;
     });
+    _qrUrl.value = _url;
   }
 
   Future<void> _showMobileConnectQr() async {
-    final server = _server;
+    var server = _server;
     if (server == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('本地服务尚未就绪，请稍后再试')),
       );
       return;
+    }
+    // Same reason as the panel above: a code pointing at a socket the system
+    // already took away always ends in ERR_CONNECTION_REFUSED on the phone.
+    if (!await server.isListening()) {
+      LaunchLog.mark('qr: server socket is gone, restarting');
+      await _startServer();
+      if (!mounted) return;
+      server = _server;
+      if (server == null) return;
     }
     // Re-read the interfaces now instead of trusting the address captured when
     // the server started: after the phone joins a different Wi-Fi its IP
@@ -1652,6 +1701,8 @@ class _SendHereHomeState extends State<SendHereHome>
     }
     server.refreshToken(disconnectExisting: false);
     final url = 'http://$address:${server.port}/?token=${server.token}';
+    LaunchLog.mark('qr: issued $address:${server.port}');
+    _qrUrl.value = url;
     await showModalBottomSheet<void>(
       context: context,
       // No drag-to-dismiss: the sheet's own vertical drag recogniser kept
@@ -1667,42 +1718,62 @@ class _SendHereHomeState extends State<SendHereHome>
       builder: (context) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Row(children: [
-              const SizedBox(width: 40),
-              const Expanded(
-                child: Text('连接此手机',
-                    textAlign: TextAlign.center,
-                    style:
-                        TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-              ),
-              SizedBox(
-                width: 40,
-                height: 40,
-                child: IconButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close_rounded, size: 20),
-                  color: SendHereColors.sub,
-                  tooltip: '关闭',
-                ),
-              ),
-            ]),
-            const SizedBox(height: 4),
-            const Text('让同一局域网内的设备扫码，即可在浏览器中发送文本和文件。',
-                textAlign: TextAlign.center, style: TextStyle(fontSize: 13)),
-            const SizedBox(height: 18),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: SendHereColors.line),
-              ),
-              child: QrImageView(data: url, size: 220),
-            ),
-            const SizedBox(height: 12),
-            _CopyLinkButton(url: url),
-          ]),
+          child: ValueListenableBuilder<String?>(
+            // While the sheet is open the app can still restart its server
+            // (return to foreground, retry after a dead socket). Rebuilding
+            // here means the code on screen is always the one that works.
+            valueListenable: _qrUrl,
+            builder: (context, liveUrl, _) => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(children: [
+                    const SizedBox(width: 40),
+                    const Expanded(
+                      child: Text('连接此手机',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700)),
+                    ),
+                    SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded, size: 20),
+                        color: SendHereColors.sub,
+                        tooltip: '关闭',
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 4),
+                  const Text('让同一局域网内的设备扫码，即可在浏览器中发送文本和文件。',
+                      textAlign: TextAlign.center, style: TextStyle(fontSize: 13)),
+                  const SizedBox(height: 18),
+                  if (liveUrl == null)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: Column(children: [
+                        CircularProgressIndicator(strokeWidth: 2),
+                        SizedBox(height: 14),
+                        Text('正在重新启动本地服务…',
+                            style: TextStyle(fontSize: 13)),
+                      ]),
+                    )
+                  else ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: SendHereColors.line),
+                      ),
+                      child: QrImageView(data: liveUrl, size: 220),
+                    ),
+                    const SizedBox(height: 12),
+                    _CopyLinkButton(url: liveUrl),
+                  ],
+                ]),
+          ),
         ),
       ),
     );
@@ -1754,6 +1825,7 @@ class _SendHereHomeState extends State<SendHereHome>
     _nearby.dispose();
     _server?.stop();
     _textController.dispose();
+    _qrUrl.dispose();
     super.dispose();
   }
 

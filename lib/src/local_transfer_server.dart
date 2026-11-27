@@ -13,6 +13,7 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'launch_log.dart';
 import 'transfer_event.dart';
 
 /// How a peer connection is currently routed. LAN is preferred: lower
@@ -108,10 +109,36 @@ class LocalTransferServer {
         .addHandler(router.call);
     try {
       _server = await serve(handler, InternetAddress.anyIPv4, 8899);
-    } on SocketException {
+    } on SocketException catch (error) {
       // A fixed default keeps QR addresses predictable, while an ephemeral
       // fallback avoids making the product fail just because 8899 is in use.
+      LaunchLog.mark('server: 8899 unavailable ($error) — ephemeral fallback');
       _server = await serve(handler, InternetAddress.anyIPv4, 0);
+    }
+    // Recorded because a QR code is only as good as the port it names: if this
+    // line ever shows a fallback port, a printed code already out there is dead.
+    LaunchLog.mark('server: listening on ${_server!.port}');
+  }
+
+  /// Whether the listening socket still answers on loopback.
+  ///
+  /// A suspended app can lose its socket while the server object stays alive,
+  /// so [isRunning] keeps answering true while every connection from another
+  /// device is refused. Only a real connect tells a live listener from a dead
+  /// one, and it is cheap enough to run before handing out a QR code.
+  Future<bool> isListening() async {
+    final current = _server;
+    if (current == null) return false;
+    try {
+      final socket = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        current.port,
+        timeout: const Duration(milliseconds: 800),
+      );
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 

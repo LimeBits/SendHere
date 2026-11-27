@@ -14,6 +14,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'device_name.dart';
+import 'launch_log.dart';
 import 'local_transfer_server.dart';
 import 'message_text.dart';
 import 'nearby_device_service.dart';
@@ -459,6 +460,7 @@ class _SendHereHomeState extends State<SendHereHome>
   @override
   void initState() {
     super.initState();
+    LaunchLog.mark('home.initState');
     WidgetsBinding.instance.addObserver(this);
     _conversationDropChannel.setMethodCallHandler((call) async {
       if (call.method == 'filesDropped') {
@@ -474,13 +476,20 @@ class _SendHereHomeState extends State<SendHereHome>
       }
     });
     _loadInitialState().whenComplete(() async {
+      LaunchLog.mark('state.loaded: peers=${_connectedPeers.length} '
+          'history=${_history.items.length}');
       await _updateNotificationBadge();
       await _refreshNotificationPermission(request: true);
+      LaunchLog.mark('permissions.ready');
       await _startServer();
+      LaunchLog.mark('server.up');
       unawaited(_checkForUpdate());
       _updateTimer = Timer.periodic(_updateCheckInterval, (_) {
         unawaited(_checkForUpdate());
       });
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LaunchLog.mark('first.frame');
     });
   }
 

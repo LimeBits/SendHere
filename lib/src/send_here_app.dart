@@ -3775,7 +3775,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                 ? NativeComposeItem.file(item.path!, path.basename(item.path!))
                 : NativeComposeItem.text(item.text!))
             .toList(),
-        height: _composeHeight,
+        // Mobile grows by itself one line at a time; only the macOS editor
+        // needs an explicit height, and it reports back through
+        // [onContentHeightChanged] as its content wraps.
+        height: _mobileLayout ? null : _composeHeight,
         onContentHeightChanged: (contentHeight) {
           final nextHeight = contentHeight.clamp(
             _minimumComposeHeight,

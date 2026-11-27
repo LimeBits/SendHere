@@ -298,9 +298,20 @@ async function request(url, options) {
   return response;
 }
 
+// Five lines of text plus the field's own padding is where the composer stops
+// growing and starts scrolling, matching the app. Derived from the computed
+// style rather than hard-coded, so changing the font or padding cannot quietly
+// cut the fifth line in half.
+const composerMaxHeight = (() => {
+  const style = getComputedStyle(text);
+  const lineHeight = parseFloat(style.lineHeight) || 22;
+  const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  return lineHeight * 5 + padding;
+})();
+
 function resizeComposer() {
   text.style.height = 'auto';
-  text.style.height = `${Math.min(text.scrollHeight, 124)}px`;
+  text.style.height = `${Math.min(text.scrollHeight, composerMaxHeight)}px`;
 }
 
 // The round key is only live when there is something to send, exactly like the

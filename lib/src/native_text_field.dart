@@ -36,7 +36,7 @@ class NativeTextField extends StatefulWidget {
     required this.onContentHeightChanged,
     required this.initialText,
     required this.composeItems,
-    this.height = 96,
+    this.height,
   });
 
   final ValueChanged<String> onChanged;
@@ -46,7 +46,32 @@ class NativeTextField extends StatefulWidget {
   final ValueChanged<double> onContentHeightChanged;
   final String initialText;
   final List<NativeComposeItem> composeItems;
-  final double height;
+
+  /// Fixed height for the macOS `NSTextView`. The mobile field ignores it and
+  /// sizes itself from its content instead, so it can pass null.
+  final double? height;
+
+  /// Composer rhythm shared with the mobile composer's pill: 20 pt per line on
+  /// top of 11 pt of vertical padding gives the familiar 42 pt single row, and
+  /// five lines land at 122 pt.
+  static const double composerFontSize = 13.5;
+  static const double composerLineHeight = 20;
+  static const int composerMaxLines = 5;
+  static const double composerVerticalPadding = 11;
+
+  static const TextStyle composerTextStyle = TextStyle(
+    fontSize: composerFontSize,
+    height: composerLineHeight / composerFontSize,
+  );
+
+  /// A strut rather than the font's own metrics: Chinese and Latin glyphs have
+  /// different natural line heights, which made wrapped lines 18 or 23 tall
+  /// depending on what the user typed.
+  static const StrutStyle composerStrutStyle = StrutStyle(
+    fontSize: composerFontSize,
+    height: composerLineHeight / composerFontSize,
+    forceStrutHeight: true,
+  );
 
   static const viewType = 'sendhere/native_text_field';
 
@@ -189,7 +214,7 @@ class NativeTextFieldState extends State<NativeTextField> {
   Widget build(BuildContext context) {
     if (defaultTargetPlatform == TargetPlatform.macOS) {
       return SizedBox(
-        height: widget.height,
+        height: widget.height ?? 96,
         child: AppKitView(
           viewType: NativeTextField.viewType,
           onPlatformViewCreated: _attach,
@@ -200,31 +225,40 @@ class NativeTextFieldState extends State<NativeTextField> {
 
     // iOS and Android do not host the macOS AppKit editor. Their standard
     // Flutter input path provides IME, paste and the on-screen keyboard.
-    return SizedBox(
-      height: widget.height,
-      child: TextField(
-        controller: _mobileController,
-        focusNode: _mobileFocusNode,
-        expands: true,
-        maxLines: null,
-        minLines: null,
-        textAlignVertical: TextAlignVertical.top,
-        keyboardType: TextInputType.multiline,
-        // The return key sends, as in WeChat. iOS and Android still show a
-        // separate 换行 key for multiline fields, which inserts the line break.
-        textInputAction: TextInputAction.send,
-        style: const TextStyle(fontSize: 13.5),
-        decoration: const InputDecoration(
-          border: InputBorder.none,
-          isDense: true,
-          // Vertically centred in the 42 pt pill the composer draws around it.
-          contentPadding: EdgeInsets.symmetric(horizontal: 2, vertical: 11),
-          hintText: '输入消息',
-          hintStyle: TextStyle(fontSize: 13.5, color: Color(0xFF9A9AA0)),
+    //
+    // The field takes its height from its content — one line at rest, one more
+    // line per soft wrap, up to five, then it scrolls internally. It used to be
+    // a fixed 42 pt `expands` box, so a wrapped second line stayed hidden and
+    // the box never grew.
+    return TextField(
+      controller: _mobileController,
+      focusNode: _mobileFocusNode,
+      minLines: 1,
+      maxLines: NativeTextField.composerMaxLines,
+      textAlignVertical: TextAlignVertical.top,
+      keyboardType: TextInputType.multiline,
+      // The return key sends, as in WeChat. iOS and Android still show a
+      // separate 换行 key for multiline fields, which inserts the line break.
+      textInputAction: TextInputAction.send,
+      style: NativeTextField.composerTextStyle,
+      strutStyle: NativeTextField.composerStrutStyle,
+      decoration: const InputDecoration(
+        border: InputBorder.none,
+        isDense: true,
+        // 11 pt each side plus one 20 pt line is the 42 pt pill that the mobile
+        // composer draws around this field.
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: 2,
+          vertical: NativeTextField.composerVerticalPadding,
         ),
-        onChanged: widget.onChanged,
-        onSubmitted: (value) => widget.onSubmitted(value),
+        hintText: '输入消息',
+        hintStyle: TextStyle(
+          fontSize: NativeTextField.composerFontSize,
+          color: Color(0xFF9A9AA0),
+        ),
       ),
+      onChanged: widget.onChanged,
+      onSubmitted: (value) => widget.onSubmitted(value),
     );
   }
 }

@@ -5,7 +5,7 @@ import 'dart:io';
 const String sendHereVersion = '0.1.0';
 
 /// Keep in step with `version:` in pubspec.yaml (the part after the plus sign).
-const int sendHereBuildNumber = 85;
+const int sendHereBuildNumber = 86;
 
 const _latestReleaseUrl =
     'https://api.github.com/repos/LimeBits/SendHere/releases/latest';

@@ -1759,8 +1759,26 @@ class _SendHereHomeState extends State<SendHereHome>
 
   @override
   Widget build(BuildContext context) {
-    final url = _url;
     final mobile = Platform.isIOS || Platform.isAndroid;
+    return PopScope<Object?>(
+      // Android hands an edge swipe to the system, not to the app, so the
+      // conversation's own drag-to-go-back never sees it. That back press then
+      // reaches the Navigator, where the app has a single route — which used to
+      // close the app straight to the launcher from an open conversation.
+      // Step back to the device list first and only leave the app from there.
+      canPop: !(mobile && _showMobileConversation),
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (mobile && _showMobileConversation) {
+          setState(() => _showMobileConversation = false);
+        }
+      },
+      child: _buildPage(context, mobile: mobile),
+    );
+  }
+
+  Widget _buildPage(BuildContext context, {required bool mobile}) {
+    final url = _url;
     return Scaffold(
       appBar: AppBar(
         // Mobile screens are white end to end, so the bar must not sit on the

@@ -1654,14 +1654,40 @@ class _SendHereHomeState extends State<SendHereHome>
     final url = 'http://$address:${server.port}/?token=${server.token}';
     await showModalBottomSheet<void>(
       context: context,
-      showDragHandle: true,
+      // No drag-to-dismiss: the sheet's own vertical drag recogniser kept
+      // swallowing taps on the copy row at the bottom, which made the link feel
+      // impossible to press. Dismissal is now the explicit close button (or a
+      // tap outside), and nothing competes with the button.
+      showDragHandle: false,
+      enableDrag: false,
+      // Let the sheet take the height its content needs instead of the default
+      // 9/16 cap: on shorter phones that cap clipped the copy row at the
+      // bottom, which read as "the button does not respond".
+      isScrollControlled: true,
       builder: (context) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('连接此手机',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
+            Row(children: [
+              const SizedBox(width: 40),
+              const Expanded(
+                child: Text('连接此手机',
+                    textAlign: TextAlign.center,
+                    style:
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              ),
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                  color: SendHereColors.sub,
+                  tooltip: '关闭',
+                ),
+              ),
+            ]),
+            const SizedBox(height: 4),
             const Text('让同一局域网内的设备扫码，即可在浏览器中发送文本和文件。',
                 textAlign: TextAlign.center, style: TextStyle(fontSize: 13)),
             const SizedBox(height: 18),
@@ -1674,7 +1700,7 @@ class _SendHereHomeState extends State<SendHereHome>
               ),
               child: QrImageView(data: url, size: 220),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             _CopyLinkButton(url: url),
           ]),
         ),

@@ -2371,6 +2371,13 @@ class _CopyLinkButtonState extends State<_CopyLinkButton> {
         child: InkWell(
           onTap: _copy,
           borderRadius: BorderRadius.circular(11),
+          // No pressed tint: the row has no visible surface, so a grey flash
+          // read as a stray rectangle appearing out of nowhere. The icon and
+          // label swap plus the haptic tick are the feedback.
+          splashFactory: NoSplash.splashFactory,
+          highlightColor: Colors.transparent,
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
           child: Padding(
             // Horizontal breathing room so taps just left/right of the label
             // land too, not only dead centre.

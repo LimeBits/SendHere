@@ -300,13 +300,28 @@ async function request(url, options) {
 
 function resizeComposer() {
   text.style.height = 'auto';
-  text.style.height = `${Math.min(text.scrollHeight, 126)}px`;
+  text.style.height = `${Math.min(text.scrollHeight, 124)}px`;
 }
+
+// The round key is only live when there is something to send, exactly like the
+// app's composer.
+function updateSendState() {
+  sendButton.disabled = text.value.trim().length === 0;
+}
+
+let sending = false;
 
 async function sendText() {
   const value = text.value.trim();
-  if (!value || sendButton.disabled) return;
-  sendButton.disabled = true;
+  if (!value || sending) return;
+  sending = true;
+  // Clear and keep the caret where it is before the request: awaiting first
+  // would move focus handling out of the tap's user gesture, and iOS then
+  // refuses to reopen the keyboard.
+  text.value = '';
+  resizeComposer();
+  updateSendState();
+  text.focus({ preventScroll: true });
   try {
     const response = await request('/api/text?token=' + encodeURIComponent(token), {
       method: 'POST',
@@ -314,25 +329,45 @@ async function sendText() {
       body: JSON.stringify({ text: value, clientName, deviceId: browserId }),
     });
     if (response.ok) {
-      text.value = '';
-      resizeComposer();
       addOutgoingText(value);
       status.textContent = '';
     } else if (response.status !== 403) {
       status.textContent = '文字发送失败，请检查连接后重试。';
+      text.value = value;
+      resizeComposer();
+      updateSendState();
     }
   } catch (_) {
     status.textContent = '文字发送失败，请检查网络后重试。';
+    text.value = value;
+    resizeComposer();
+    updateSendState();
   } finally {
-    sendButton.disabled = false;
+    sending = false;
   }
 }
 
 sendButton.onclick = sendText;
-text.addEventListener('input', resizeComposer);
+// Sending must not close the keyboard. Cancelling pointerdown keeps focus in
+// the textarea (the click still fires), so the user can type the next message
+// straight away. Only a tap outside the composer or the keyboard's own dismiss
+// key hides it.
+sendButton.addEventListener('pointerdown', event => event.preventDefault());
+text.addEventListener('input', () => {
+  resizeComposer();
+  updateSendState();
+});
+// Tapping anywhere outside the composer is the "outside the input" gesture that
+// should put the keyboard away.
+document.addEventListener('pointerdown', event => {
+  const target = event.target;
+  if (target instanceof Element && target.closest('.composer')) return;
+  if (document.activeElement === text) text.blur();
+});
 // The mobile keyboard's return key always inserts a newline. Sending is an
 // explicit action through the button, matching the native mobile app.
 resizeComposer();
+updateSendState();
 
 async function uploadFile(file) {
   // Upload one File as the request body rather than as multipart/form-data.

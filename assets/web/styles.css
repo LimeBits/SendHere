@@ -59,17 +59,22 @@ h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 
 .download-link { display: inline-flex; margin-top: 8px; color: #3f57cc; font-size: 13px; text-decoration: none; }
 .download-link:active { opacity: .65; }
 
-.composer-shell { flex: 0 0 auto; padding: 8px max(12px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); background: rgba(248, 249, 251, .98); border-top: 1px solid #e3e5e8; }
+/* Composer mirrors the native app: a white band holding a grey attach circle,
+   a grey pill field and a round accent send key, all bottom-aligned so the
+   field grows upwards without shifting the buttons. */
+.composer-shell { flex: 0 0 auto; padding: 8px max(14px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); background: #fff; }
 .composer, .transfer-status { width: min(100%, 696px); margin-right: auto; margin-left: auto; }
-.composer { background: #fff; border: 1px solid #d8dbe1; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 9px #1118270d; }
-textarea { display: block; width: 100%; min-height: 50px; max-height: 126px; padding: 12px 13px 7px; border: 0; outline: 0; resize: none; line-height: 1.45; background: transparent; }
+.composer { display: flex; align-items: flex-end; gap: 10px; }
+textarea { display: block; width: 100%; min-height: 42px; max-height: 124px; padding: 10px 0; border: 0; outline: 0; resize: none; line-height: 1.45; font-size: 15px; background: transparent; }
 textarea::placeholder { color: #a6a9b0; }
-.composer-actions { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 6px 7px 6px 8px; border-top: 1px solid #edf0f3; }
-.attachment-button { position: relative; display: grid; place-items: center; width: 32px; height: 32px; overflow: hidden; border: 0; border-radius: 50%; color: #5c6573; background: #f1f3f6; font-size: 25px; line-height: 1; cursor: pointer; }
+.field-shell { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; padding: 0 11px; border-radius: 21px; background: #f0f0f0; }
+.attachment-button { position: relative; flex: 0 0 auto; display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 4px; overflow: hidden; border: 0; border-radius: 50%; color: #111; background: #f0f0f0; font-size: 22px; line-height: 1; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.attachment-button:active { background: #e4e4e4; }
 .attachment-button > span { display: block; transform: translateY(-1px); }
 .attachment-button input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
-.send-button { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 12px; border: 0; border-radius: 9px; color: #fff; background: #4261d6; font-size: 13px; font-weight: 600; }
-.send-button:disabled { background: #aeb7df; cursor: default; }
+.send-button { flex: 0 0 auto; display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: #2563eb; -webkit-tap-highlight-color: transparent; transition: background .15s ease, color .15s ease; }
+.send-button:disabled { color: #b0b0b6; background: #f0f0f0; cursor: default; }
+.send-glyph { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .transfer-status { min-height: 14px; padding: 4px 4px 0; color: #777c86; font-size: 11px; }
 
 .image-preview { position: fixed; inset: 0; z-index: 10; display: flex; justify-content: center; align-items: flex-start; padding: max(58px, calc(env(safe-area-inset-top) + 8px)) 18px max(72px, calc(env(safe-area-inset-bottom) + 52px)); background: rgba(0, 0, 0, .9); }
@@ -90,4 +95,4 @@ textarea::placeholder { color: #a6a9b0; }
 .help-box p { margin-top: 7px; line-height: 1.45; }
 
 @media (min-width: 721px) { .chat-page { border-right: 1px solid #e4e6e9; border-left: 1px solid #e4e6e9; } }
-@media (max-width: 380px) { .messages { padding-right: 12px; padding-left: 12px; } .message-bubble { max-width: 84%; } .send-button span:last-child { display: none; } .send-button { width: 34px; padding: 0; justify-content: center; } }
+@media (max-width: 380px) { .messages { padding-right: 12px; padding-left: 12px; } .message-bubble { max-width: 84%; } .composer { gap: 8px; } }

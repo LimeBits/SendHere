@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SendHere</title>
-<link rel="stylesheet" href="/styles.css?v=44">
+<link rel="stylesheet" href="/styles.css?v=45">
 </head>
 <body>
 <main class="chat-page">
@@ -23,18 +23,20 @@
 </section>
 <footer class="composer-shell">
 <div class="composer">
-<textarea id="text" rows="1" placeholder="输入消息" aria-label="输入消息"></textarea>
-<div class="composer-actions">
 <label class="attachment-button" aria-label="添加文件" title="添加文件">
-<span aria-hidden="true">+</span>
+<span aria-hidden="true">＋</span>
 <input id="files" type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.7z,.txt">
 </label>
-<button id="send-text" class="send-button" type="button" aria-label="发送">发送</button>
+<div class="field-shell">
+<textarea id="text" rows="1" placeholder="发消息…" aria-label="输入消息"></textarea>
 </div>
+<button id="send-text" class="send-button" type="button" aria-label="发送" disabled>
+<svg class="send-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18.5V6"/><path d="M6.3 11.4 12 5.7l5.7 5.7"/></svg>
+</button>
 </div>
 <div id="upload-status" class="transfer-status" aria-live="polite"></div>
 </footer>
 </main>
-<script src="/app.js?v=44"></script>
+<script src="/app.js?v=45"></script>
 </body>
 </html>

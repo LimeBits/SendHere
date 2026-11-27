@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -17,12 +18,40 @@ import java.io.FileInputStream
 class MainActivity : FlutterActivity() {
     private val fileChannel = "sendhere/mobile_file"
 
+    /**
+     * The name other devices see, matching what iOS and macOS report
+     * (`UIDevice.name` / `Host.localizedName`): the name the owner gave the
+     * phone, not a build identifier.
+     *
+     * `Build.MODEL` cannot be used as-is: Xiaomi/Redmi/POCO ship the internal
+     * part number there (this phone reports "24069RA21C" for a Redmi Turbo 3),
+     * which means nothing to the person on the other end.
+     */
+    private fun deviceName(): String {
+        try {
+            val configured = Settings.Global.getString(
+                contentResolver, Settings.Global.DEVICE_NAME)
+            if (!configured.isNullOrBlank()) return configured.trim()
+        } catch (_: Exception) {
+            // Older releases have no DEVICE_NAME; fall through to the model.
+        }
+        val model = Build.MODEL.orEmpty().trim()
+        // Year-week codes such as 24069RA21C / 2312DRA50C. Samsung's SM-S918B
+        // and Pixel's "Pixel 8 Pro" start with letters and pass through.
+        val isPartNumber = Regex("^\\d{4,6}[A-Z][A-Z0-9]*$").matches(model)
+        if (model.isNotEmpty() && !isPartNumber) return model
+        // Prefer the line brand over the parent company: Redmi over Xiaomi.
+        val brand = Build.BRAND.orEmpty().ifBlank { Build.MANUFACTURER.orEmpty() }
+        val readable = brand.trim().replaceFirstChar { it.uppercase() }
+        return if (readable.isEmpty()) "Android 设备" else "$readable 手机"
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sendhere/device_name")
             .setMethodCallHandler { call, result ->
                 if (call.method == "get") {
-                    result.success(Build.MODEL.ifBlank { "Android 设备" })
+                    result.success(deviceName())
                 } else {
                     result.notImplemented()
                 }

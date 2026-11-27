@@ -10,6 +10,7 @@ class TransferEvent {
     required this.createdAt,
     this.direction = TransferDirection.received,
     this.clientName,
+    this.clientAgent,
     this.deviceId,
     this.text,
     this.fileName,
@@ -29,6 +30,10 @@ class TransferEvent {
   final DateTime createdAt;
   final TransferDirection direction;
   final String? clientName;
+
+  /// For browser sessions, the browser or in-app container they run in
+  /// ("Safari", "微信", "App"). Null for native peers.
+  final String? clientAgent;
   final String? deviceId;
   final String? text;
   final String? fileName;
@@ -62,6 +67,7 @@ class TransferEvent {
       createdAt: createdAt,
       direction: direction,
       clientName: clientName,
+      clientAgent: clientAgent,
       deviceId: deviceId,
       text: text,
       fileName: fileName,

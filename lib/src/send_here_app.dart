@@ -787,7 +787,9 @@ class _SendHereHomeState extends State<SendHereHome>
                   port: event.peerPort ?? previous?.port,
                   transport: event.isComputerPeer
                       ? server.peerTransport(deviceId)
-                      : null);
+                      : null,
+                  // Keep the last known browser when a reconnect omits it.
+                  agent: event.clientAgent ?? previous?.agent);
               // Every QR browser identification represents a user opening a
               // phone session. It may reuse an ID from the recent-device list,
               // so select it even when that historical conversation already
@@ -2031,11 +2033,17 @@ class _PeerDevice {
     this.tailscaleAddress,
     this.port,
     this.transport,
+    this.agent,
   });
   final String id;
   final String name;
   final bool online;
   final DateTime lastSeenAt;
+
+  /// For a browser session, which browser it runs in ("Safari", "微信",
+  /// "App"). Shown on the status line as "在线 · Safari". Null for native
+  /// peers, which have no browser.
+  final String? agent;
 
   /// Remembered Tailscale address of a computer peer, used to reconnect when
   /// it is not discoverable on the LAN.
@@ -2057,6 +2065,7 @@ class _PeerDevice {
     int? port,
     PeerTransport? transport,
     bool clearTransport = false,
+    String? agent,
   }) =>
       _PeerDevice(
         id: id,
@@ -2066,6 +2075,7 @@ class _PeerDevice {
         tailscaleAddress: tailscaleAddress ?? this.tailscaleAddress,
         port: port ?? this.port,
         transport: clearTransport ? null : (transport ?? this.transport),
+        agent: agent ?? this.agent,
       );
 
   Map<String, dynamic> toJson() => {
@@ -2074,6 +2084,7 @@ class _PeerDevice {
         'lastSeenAt': lastSeenAt.toIso8601String(),
         if (tailscaleAddress != null) 'tailscaleAddress': tailscaleAddress,
         if (port != null) 'port': port,
+        if (agent != null) 'agent': agent,
       };
 
   factory _PeerDevice.fromJson(Map<String, dynamic> json) => _PeerDevice(
@@ -2084,6 +2095,7 @@ class _PeerDevice {
             DateTime.fromMillisecondsSinceEpoch(0),
         tailscaleAddress: json['tailscaleAddress'] as String?,
         port: json['port'] as int?,
+        agent: json['agent'] as String?,
       );
 }
 
@@ -2282,37 +2294,40 @@ class _CopyLinkButtonState extends State<_CopyLinkButton> {
   }
 
   @override
-  Widget build(BuildContext context) => Material(
-        color: _copied ? SendHereColors.chip : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: _copy,
-          child: SizedBox(
-            // Full width of the sheet and a 44 pt tall target.
-            width: double.infinity,
-            height: 44,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(_copied ? Icons.check : Icons.copy_outlined,
-                    size: 17,
-                    color: _copied
-                        ? SendHereColors.online
-                        : SendHereColors.brandText),
-                const SizedBox(width: 7),
-                Text(_copied ? '已复制' : '复制连接链接',
-                    style: TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
-                        color: _copied
-                            ? SendHereColors.online
-                            : SendHereColors.brandText)),
-              ],
-            ),
+  Widget build(BuildContext context) {
+    final accent =
+        _copied ? SendHereColors.online : SendHereColors.brandText;
+    return Material(
+      // A filled surface, never transparent: a transparent Material takes part
+      // in hit testing only where its child paints, so taps beside the label
+      // fell through and the button felt broken.
+      color: SendHereColors.chip,
+      borderRadius: BorderRadius.circular(11),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: _copy,
+        child: SizedBox(
+          // Full width of the sheet, 48 tall: comfortably above the 44 pt
+          // minimum touch target.
+          width: double.infinity,
+          height: 48,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(_copied ? Icons.check_circle : Icons.copy_outlined,
+                  size: 18, color: accent),
+              const SizedBox(width: 8),
+              Text(_copied ? '已复制' : '复制连接链接',
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: accent)),
+            ],
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 /// The 添加远程电脑 panel. It sits in the same sidebar slot as the QR panel so
@@ -2840,14 +2855,21 @@ class _DeviceTile extends StatelessWidget {
           ? '连接中 · Tailscale'
           : '连接中…';
     }
-    if (!device.online) return _lastSeenLabel(context, device.lastSeenAt);
+    if (!device.online) {
+      final seen = _lastSeenLabel(context, device.lastSeenAt);
+      // Keep the browser visible while offline too, so a remembered session
+      // still says which one it was.
+      return device.agent == null ? seen : '$seen · ${device.agent}';
+    }
     switch (device.transport) {
       case PeerTransport.lan:
         return '在线 · 局域网';
       case PeerTransport.tailscale:
         return '在线 · Tailscale 远程';
+      // A browser session has no transport of its own, so the second line
+      // names the browser instead: "在线 · Safari".
       case null:
-        return '在线';
+        return device.agent == null ? '在线' : '在线 · ${device.agent}';
     }
   }
 

@@ -73,9 +73,11 @@ const platformLabel = detectPlatform(userAgent);
 const isStandalone =
   window.matchMedia('(display-mode: standalone)').matches ||
   navigator.standalone === true;
-const clientName = isStandalone
-  ? `${platformLabel} App · ${browserId.slice(-4)}`
-  : `${platformLabel} ${browserLabel} · ${browserId.slice(-4)}`;
+// The browser (or "App" when launched from the home screen) is reported
+// separately from the name, so the device list can show it on its second line
+// next to the online state, e.g. "在线 · Safari".
+const clientAgent = isStandalone ? 'App' : browserLabel;
+const clientName = `${platformLabel} · ${browserId.slice(-4)}`;
 const historyKey = `sendhere-chat-history:${token}:${browserId}`;
 const historyLimit = 100;
 let socket;
@@ -85,7 +87,7 @@ let reconnectDelay = 1000;
 
 function renderDeviceName() {
   // "这台手机" was wrong whenever the page was opened on a computer.
-  deviceNameLabel.textContent = `本机：${clientName}`;
+  deviceNameLabel.textContent = `本机：${clientName} · ${clientAgent}`;
 }
 
 function scrollToLatest() {
@@ -402,7 +404,14 @@ function scheduleReconnect() {
 }
 
 function identify() {
-  socket.send(JSON.stringify({ type: 'identify', name: clientName, id: browserId }));
+  socket.send(
+    JSON.stringify({
+      type: 'identify',
+      name: clientName,
+      id: browserId,
+      agent: clientAgent,
+    }),
+  );
 }
 
 function connectSocket() {

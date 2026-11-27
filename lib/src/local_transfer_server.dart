@@ -913,6 +913,8 @@ class LocalTransferServer {
         if (data['type'] == 'identify' && data['name'] is String) {
           final identifiedName = data['name'] as String;
           final identifiedId = data['id'] as String?;
+          // Browsers report which browser they are; native peers do not.
+          final identifiedAgent = data['agent'] as String?;
           final peer = data['peer'] == true && identifiedId != null;
           _clients[socket] = identifiedName;
           if (identifiedId != null) _clientIds[socket] = identifiedId;
@@ -976,6 +978,7 @@ class LocalTransferServer {
                 type: TransferEventType.clientConnected,
                 createdAt: DateTime.now(),
                 clientName: identifiedName,
+                clientAgent: identifiedAgent,
                 deviceId: identifiedId,
                 isComputerPeer: peer,
                 peerTailscaleAddress:

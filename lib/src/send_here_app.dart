@@ -1345,27 +1345,45 @@ class _SendHereHomeState extends State<SendHereHome>
       if (Platform.isIOS || Platform.isAndroid) {
         final source = await showModalBottomSheet<_AttachmentSource>(
           context: context,
-          showDragHandle: true,
+          backgroundColor: SendHereColors.card,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
           builder: (context) => SafeArea(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              ListTile(
-                leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('选择照片'),
-                subtitle: const Text('支持多选图片'),
-                onTap: () =>
-                    Navigator.of(context).pop(_AttachmentSource.photos),
-              ),
-              ListTile(
-                leading: const Icon(Icons.folder_open_outlined),
-                title: const Text('选择文件'),
-                subtitle: const Text('任意文件类型'),
-                onTap: () => Navigator.of(context).pop(_AttachmentSource.files),
-              ),
-              const SizedBox(height: 8),
-            ]),
+            // Three equal targets instead of a list of rows. With this few
+            // options a list reads as a settings page, every entry looks like
+            // every other one, and the camera — the fastest path, and now the
+            // most likely one — would merely be the first of three identical
+            // lines rather than sitting out on its own.
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 20, 12, 10),
+              child: Row(children: [
+                _AttachmentAction(
+                  icon: Icons.photo_camera_outlined,
+                  label: '拍照',
+                  onTap: () =>
+                      Navigator.of(context).pop(_AttachmentSource.camera),
+                ),
+                _AttachmentAction(
+                  icon: Icons.photo_library_outlined,
+                  label: '照片',
+                  onTap: () =>
+                      Navigator.of(context).pop(_AttachmentSource.photos),
+                ),
+                _AttachmentAction(
+                  icon: Icons.folder_open_outlined,
+                  label: '文件',
+                  onTap: () => Navigator.of(context).pop(_AttachmentSource.files),
+                ),
+              ]),
+            ),
           ),
         );
         if (source == null) return;
+        if (source == _AttachmentSource.camera) {
+          await _capturePhoto();
+          return;
+        }
         if (source == _AttachmentSource.photos) {
           final photos = await ImagePicker().pickMultiImage();
           await _sendSelectedMobileFiles(
@@ -1385,6 +1403,54 @@ class _SendHereHomeState extends State<SendHereHome>
             .showSnackBar(SnackBar(content: Text('无法添加文件：$error')));
       }
     }
+  }
+
+  /// Opens the system camera and sends whatever comes back.
+  ///
+  /// Deliberately the system camera rather than an in-app preview: on a phone
+  /// it is the camera people already know, it hands back a full-resolution
+  /// photo with the orientation baked in, and it saves maintaining a capture
+  /// surface in two native projects.
+  ///
+  /// The photo goes down the same path as a picked one, so it is copied into
+  /// the outbox before sending — image_picker hands over a file in the
+  /// temporary directory, which the OS is free to sweep up the moment we let go
+  /// of it.
+  Future<void> _capturePhoto() async {
+    final String? path;
+    LaunchLog.mark('camera: opening');
+    try {
+      final photo = await ImagePicker().pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.rear,
+      );
+      path = photo?.path;
+    } on PlatformException catch (error) {
+      // Logged because this one is invisible from the outside: the camera
+      // screen closes and nothing happens, which is indistinguishable from a
+      // stray tap on cancel.
+      LaunchLog.mark('camera: failed ${error.code} ${error.message ?? ''}');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            // The permission case is the one people hit, and it needs a
+            // different sentence from a camera that simply failed to open.
+            error.code == 'camera_access_denied'
+                ? '没有相机权限。请到「设置 → SendHere」打开相机，再回来拍。'
+                : '无法打开相机：${error.message ?? error.code}',
+          ),
+        ),
+      );
+      return;
+    }
+    // Null means the shutter was never pressed — no snack bar, nothing to undo.
+    if (path == null || path.isEmpty) {
+      LaunchLog.mark('camera: cancelled');
+      return;
+    }
+    LaunchLog.mark('camera: captured $path');
+    await _sendSelectedMobileFiles([path]);
   }
 
   Future<void> _sendSelectedMobileFiles(List<String> paths) async {
@@ -2129,7 +2195,55 @@ class _SendHereHomeState extends State<SendHereHome>
   }
 }
 
-enum _AttachmentSource { photos, files }
+/// One tile of the attachment sheet: a 52 pt rounded square with the icon in
+/// it, and a label underneath.
+///
+/// Larger than it looks — the whole column is tappable, so the target is about
+/// 90 × 76 pt, which is the point: three of these should be hittable without
+/// aiming, one-handed, while the other hand is holding the phone being
+/// photographed.
+class _AttachmentAction extends StatelessWidget {
+  const _AttachmentAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(SendHereRadius.small),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 52,
+              height: 52,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: SendHereColors.chip,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(icon, size: 24, color: SendHereColors.ink),
+            ),
+            const SizedBox(height: 8),
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 12.5, color: SendHereColors.ink)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+enum _AttachmentSource { camera, photos, files }
 
 /// Progress stages shown in the "添加远程电脑" dialog while _addRemoteDevice
 /// resolves the host, probes it, and dials the WebSocket connection.

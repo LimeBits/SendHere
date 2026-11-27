@@ -34,6 +34,8 @@
 	<string>SendHere 需要访问本地网络，以发现附近设备并传输文件和文本。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>SendHere 需要将您选择保存的图片添加到照片图库。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>拍下照片后直接发送给附近的设备。照片不会上传到任何服务器。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_sendhere._tcp</string>

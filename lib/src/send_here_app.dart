@@ -2276,7 +2276,9 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
 ///
 /// Replaces an earlier `TextButton.icon` plus snack bar: the button's hit area
 /// was only as wide as its label, so taps near it did nothing, and repeated
-/// taps queued up one snack bar per press.
+/// taps queued up one snack bar per press. A saturated full-width button was
+/// tried in between and looked heavy under the QR code, so the tap target is
+/// generous while the paint stays a quiet grey row.
 class _CopyLinkButton extends StatefulWidget {
   const _CopyLinkButton({required this.url, this.compact = false});
 
@@ -2302,6 +2304,9 @@ class _CopyLinkButtonState extends State<_CopyLinkButton> {
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: widget.url));
     if (!mounted) return;
+    // The only visual change on success is the icon and the label, so add a
+    // small haptic tick to make the tap feel acknowledged on a phone.
+    HapticFeedback.selectionClick();
     setState(() => _copied = true);
     // Restarting the timer means holding the button down repeatedly just keeps
     // showing one confirmation, instead of stacking notifications.
@@ -2313,31 +2318,38 @@ class _CopyLinkButtonState extends State<_CopyLinkButton> {
 
   @override
   Widget build(BuildContext context) {
-    // A real FilledButton rather than a hand-built Material + InkWell. Earlier
-    // attempts kept missing taps because the custom surface only registered
-    // hits where its child painted; the framework's button guarantees the
-    // whole rectangle is tappable and sized for touch.
+    // A quiet grey row rather than a saturated block: the QR code is the hero
+    // of this sheet and a full-width blue bar shouted over it.
+    //
+    // The surface is a filled `Material` (never transparent) and the InkWell
+    // is opaque internally, so the whole rectangle reacts to touch instead of
+    // only the pixels the icon and label paint on. The row is deliberately
+    // tall — 52 on mobile — because the earlier 48-tall version still felt
+    // fiddly to hit.
     return SizedBox(
       width: double.infinity,
-      height: widget.compact ? 38 : 50,
-      child: FilledButton.icon(
-        onPressed: _copy,
-        style: FilledButton.styleFrom(
-          // Confirmation stays on the brand colour, only lightened, so it
-          // reads as the same button rather than a success message.
-          backgroundColor:
-              _copied ? SendHereColors.brandSoft : SendHereColors.brand,
-          foregroundColor:
-              _copied ? SendHereColors.brandText : SendHereColors.onBrand,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          textStyle: TextStyle(
-              fontSize: widget.compact ? 12.5 : 15,
-              fontWeight: FontWeight.w600),
+      height: widget.compact ? 42 : 52,
+      child: Material(
+        color: SendHereColors.chip,
+        borderRadius: BorderRadius.circular(11),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: _copy,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(_copied ? Icons.check : Icons.copy_outlined,
+                  size: widget.compact ? 16 : 18,
+                  color: SendHereColors.brandText),
+              const SizedBox(width: 7),
+              Text(_copied ? '已复制' : '复制连接链接',
+                  style: TextStyle(
+                      fontSize: widget.compact ? 12.5 : 14,
+                      fontWeight: FontWeight.w600,
+                      color: SendHereColors.brandText)),
+            ],
+          ),
         ),
-        icon: Icon(_copied ? Icons.check : Icons.copy_outlined,
-            size: widget.compact ? 16 : 19),
-        label: Text(_copied ? '已复制' : '复制连接链接'),
       ),
     );
   }

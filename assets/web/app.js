@@ -15,9 +15,67 @@ if (!browserId) {
   browserId = Math.random().toString(36).slice(2, 10).toUpperCase();
   localStorage.setItem(browserIdKey, browserId);
 }
-const isWeChat = /MicroMessenger/i.test(navigator.userAgent);
-const isIPhone = /iPhone/i.test(navigator.userAgent);
-const clientName = `${isWeChat ? '微信 ' : ''}${isIPhone ? 'iPhone' : '手机'} · ${browserId.slice(-4)}`;
+// Names this browser session for the device list, e.g. "iPhone Safari · 7F3A".
+// Every session used to report just "手机 · XXXX", so two tabs or two phones
+// were indistinguishable in the list.
+//
+// Order matters: in-app browsers and Chromium forks all carry "Safari" and
+// usually "Chrome" in their user agent, so they have to be matched before the
+// browsers they impersonate.
+function detectBrowser(ua) {
+  const rules = [
+    [/MicroMessenger/i, '微信'],
+    [/QQ\//i, 'QQ'],
+    [/DingTalk/i, '钉钉'],
+    [/Feishu|Lark/i, '飞书'],
+    [/Weibo/i, '微博'],
+    [/Alipay/i, '支付宝'],
+    [/DouBan|BiliApp|Douyin|Quark/i, '内置浏览器'],
+    [/EdgA?\//i, 'Edge'],
+    [/OPR\/|Opera/i, 'Opera'],
+    [/Vivaldi/i, 'Vivaldi'],
+    [/Brave/i, 'Brave'],
+    [/YaBrowser/i, 'Yandex'],
+    [/SamsungBrowser/i, 'Samsung'],
+    [/HuaweiBrowser/i, '华为浏览器'],
+    [/MiuiBrowser/i, '小米浏览器'],
+    [/HeyTapBrowser/i, 'OPPO 浏览器'],
+    [/UCBrowser|UBrowser/i, 'UC'],
+    [/Firefox|FxiOS/i, 'Firefox'],
+    [/CriOS|Chrome/i, 'Chrome'],
+    [/Safari/i, 'Safari'],
+  ];
+  for (const [pattern, label] of rules) {
+    if (pattern.test(ua)) return label;
+  }
+  return '浏览器';
+}
+
+// The platform the browser runs on. iPadOS Safari reports a Mac user agent, so
+// a touch-capable "Mac" is treated as an iPad.
+function detectPlatform(ua) {
+  if (/iPhone/i.test(ua)) return 'iPhone';
+  if (/iPad/i.test(ua)) return 'iPad';
+  if (/Android/i.test(ua)) return 'Android';
+  if (/Macintosh/i.test(ua)) {
+    return navigator.maxTouchPoints > 1 ? 'iPad' : 'Mac';
+  }
+  if (/Windows/i.test(ua)) return 'Windows';
+  if (/Linux/i.test(ua)) return 'Linux';
+  return '设备';
+}
+
+const userAgent = navigator.userAgent;
+const browserLabel = detectBrowser(userAgent);
+const platformLabel = detectPlatform(userAgent);
+// Standalone means the page was added to the home screen, so it behaves like
+// an app rather than a browser tab.
+const isStandalone =
+  window.matchMedia('(display-mode: standalone)').matches ||
+  navigator.standalone === true;
+const clientName = isStandalone
+  ? `${platformLabel} App · ${browserId.slice(-4)}`
+  : `${platformLabel} ${browserLabel} · ${browserId.slice(-4)}`;
 const historyKey = `sendhere-chat-history:${token}:${browserId}`;
 const historyLimit = 100;
 let socket;
@@ -26,7 +84,8 @@ let heartbeatTimer;
 let reconnectDelay = 1000;
 
 function renderDeviceName() {
-  deviceNameLabel.textContent = `这台手机：${clientName}`;
+  // "这台手机" was wrong whenever the page was opened on a computer.
+  deviceNameLabel.textContent = `本机：${clientName}`;
 }
 
 function scrollToLatest() {

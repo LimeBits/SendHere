@@ -2851,9 +2851,24 @@ class _DeviceTile extends StatelessWidget {
     }
   }
 
+  /// Picks the phone glyph for handheld devices and browser sessions running
+  /// on them. Browser sessions now report names like "iPhone Safari · 7F3A" or
+  /// "Windows Edge · 20B1", so matching only 手机/iPhone would have shown a
+  /// laptop icon for most phones.
+  static bool _looksLikePhone(String name) {
+    const handheld = [
+      '手机',
+      'iPhone',
+      'iPad',
+      'Android',
+      '平板',
+    ];
+    return handheld.any((token) => name.contains(token));
+  }
+
   @override
   Widget build(BuildContext context) {
-    final phone = device.name.contains('手机') || device.name.contains('iPhone');
+    final phone = _looksLikePhone(device.name);
     final statusLabel = _statusLabel(context);
     final desktop = !Platform.isIOS && !Platform.isAndroid;
     final tile = Material(

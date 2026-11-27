@@ -61,6 +61,38 @@ class LaunchLog {
     }
   }
 
+  /// Absolute path of the log, once [start] has resolved it.
+  static String? get filePath => _file?.path;
+
+  /// The log as text, oldest line first, trimmed to the same [_maxLines] window
+  /// the file keeps across launches. Returns '' rather than throwing so the
+  /// diagnostics screen can always render something.
+  static Future<String> read() async {
+    final file = _file;
+    if (file == null) return '';
+    try {
+      if (!await file.exists()) return '';
+      final lines = await file.readAsLines();
+      if (lines.length <= _maxLines) return lines.join('\n');
+      return lines.sublist(lines.length - _maxLines).join('\n');
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Empties the file. The diagnostics screen calls this after the reader has
+  /// taken a copy, so the next failure starts from a clean trail instead of
+  /// being buried under an unrelated session.
+  static Future<void> clear() async {
+    final file = _file;
+    if (file == null) return;
+    try {
+      await file.writeAsString('');
+    } catch (_) {
+      // Best effort, same as every other write here.
+    }
+  }
+
   /// Records an error with the first few stack frames.
   static void error(String label, Object error, StackTrace? stack) {
     mark('$label: $error');

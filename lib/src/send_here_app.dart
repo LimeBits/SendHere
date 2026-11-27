@@ -14,6 +14,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'device_name.dart';
+import 'diagnostics_sheet.dart';
 import 'launch_log.dart';
 import 'local_transfer_server.dart';
 import 'message_text.dart';
@@ -1799,6 +1800,33 @@ class _SendHereHomeState extends State<SendHereHome>
 
   void _hidePhoneConnectPanel() => setState(() => _phoneQrExpanded = false);
 
+  Future<void> _showDiagnostics() =>
+      showDiagnosticsSheet(context, collect: _collectDiagnostics);
+
+  /// Builds the snapshot behind the diagnostics sheet.
+  ///
+  /// The socket probe runs every time the sheet opens instead of being cached:
+  /// "the server object says it is running" and "something is actually
+  /// accepting connections" have already diverged once in this app, and that
+  /// difference is the single most useful line here.
+  Future<DiagnosticsReport> _collectDiagnostics() async {
+    final server = _server;
+    final listening = server != null && await server.isListening();
+    final facts = <MapEntry<String, String>>[
+      const MapEntry('版本', 'v$sendHereVersion ($sendHereBuildNumber)'),
+      MapEntry('系统', Platform.operatingSystemVersion),
+      MapEntry('本机名称', await DeviceName.current()),
+      MapEntry('局域网地址', _address ?? '无'),
+      MapEntry('端口', server == null ? '-' : '${server.port}'),
+      MapEntry('服务端', listening ? '正在监听' : '未监听'),
+      MapEntry('已连接设备', '${_connectedPeers.length} 台'),
+      if (_tailscaleAddress != null) MapEntry('Tailscale', _tailscaleAddress!),
+      if (Platform.isIOS || Platform.isAndroid)
+        MapEntry('通知权限', _notificationPermission ?? '未知'),
+    ];
+    return DiagnosticsReport(facts: facts, log: await LaunchLog.read());
+  }
+
   void _openMobileConversation(String id) {
     _selectPeer(id);
     setState(() => _showMobileConversation = true);
@@ -1961,6 +1989,7 @@ class _SendHereHomeState extends State<SendHereHome>
                           requestNotificationPermission: () =>
                               _refreshNotificationPermission(request: true),
                           openNotificationSettings: _openNotificationSettings,
+                          showDiagnostics: _showDiagnostics,
                         );
                         final conversation = _ConversationPanel(
                           key: ValueKey(
@@ -2273,6 +2302,7 @@ class _DeviceSidebar extends StatefulWidget {
     required this.notificationPermission,
     required this.requestNotificationPermission,
     required this.openNotificationSettings,
+    required this.showDiagnostics,
   });
 
   final String url;
@@ -2290,6 +2320,7 @@ class _DeviceSidebar extends StatefulWidget {
   final String? notificationPermission;
   final VoidCallback requestNotificationPermission;
   final VoidCallback openNotificationSettings;
+  final VoidCallback showDiagnostics;
 
   @override
   State<_DeviceSidebar> createState() => _DeviceSidebarState();
@@ -2409,24 +2440,31 @@ class _DeviceSidebarState extends State<_DeviceSidebar> {
                     ),
             ),
             // Only on phones: desktop already shows the build in its window
-            // chrome and has no "bottom of the list" to speak of. Deliberately
-            // faint — it is here so a tester can read off which build they are
-            // running, not as a piece of interface.
+            // chrome and has no "bottom of the list" to speak of.
+            //
+            // Doubles as the way into diagnostics. The line already existed so a
+            // tester could read off which build they were running, and "which
+            // build is this" and "what is it doing" are the same question asked
+            // at the same moment. Kept faint on purpose: it is plumbing, not a
+            // feature, and nobody should tap it by accident.
             if (mobile)
-              Padding(
-                padding: EdgeInsets.only(
-                  top: 8,
-                  // Clears the home indicator, which the list is allowed to run
-                  // under but a line of text is not.
-                  bottom: 10 + MediaQuery.of(context).padding.bottom,
-                ),
-                child: const Text(
-                  'v$sendHereVersion ($sendHereBuildNumber)',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 11,
-                    letterSpacing: 0.2,
-                    color: Color(0xFFB9BBC0),
+              InkWell(
+                onTap: widget.showDiagnostics,
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    top: 8,
+                    // Clears the home indicator, which the list is allowed to
+                    // run under but a line of text is not.
+                    bottom: 10 + MediaQuery.of(context).padding.bottom,
+                  ),
+                  child: const Text(
+                    'v$sendHereVersion ($sendHereBuildNumber) · 诊断',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      letterSpacing: 0.2,
+                      color: Color(0xFF9EA3AA),
+                    ),
                   ),
                 ),
               ),
